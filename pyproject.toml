@@ -1,0 +1,9 @@
+[tool.black]
+exclude = '''
+/(
+    \.venv
+)/
+'''
+
+[tool.isort]
+skip = [".venv", "venv"]

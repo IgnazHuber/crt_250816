@@ -1,0 +1,33 @@
+# Kernanalyse
+polars>=0.20.0
+pandas>=2.2
+numpy>=1.25
+
+# Visualisierung (optional für spätere Erweiterung)
+plotly>=5.20
+matplotlib>=3.8
+
+# Dateiformate
+pyarrow>=15.0
+openpyxl>=3.1
+xlsxwriter>=3.2
+
+# CLI & Tools
+tqdm>=4.66
+joblib>=1.4
+pyyaml>=6.0
+tabulate>=0.9
+
+# Debug & Tests
+pytest>=8.0
+
+# Dev-Tools (optional)
+black
+flake8
+isort
+pre-commit
+
+# Sonstiges
+pre-commit
+finplot
+

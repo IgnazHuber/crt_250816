@@ -1,0 +1,23 @@
+# Core Data Science
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Technische Indikatoren und Signalverarbeitung
+scipy>=1.10.0
+
+# Visualisierung
+plotly>=5.17.0
+finplot>=1.9.0  # Bestehende finplot-Abhängigkeit beibehalten
+
+# Dateiformate
+pyarrow>=10.0.0  # Für Parquet-Support
+
+# Für Plotly PNG Export (nur wenn benötigt, kann Probleme mit Python 3.11+ haben)
+# kaleido>=0.2.1  # Kommentiert wegen Python-Versionskonflikten
+
+# Development Tools (optional)
+# pytest>=7.0.0
+# black>=23.0.0
+# flake8>=5.0.0
+
+# Hinweis: tkinter ist standardmäßig in Python enthalten und muss nicht installiert werden

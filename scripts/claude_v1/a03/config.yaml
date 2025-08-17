@@ -1,0 +1,120 @@
+# Konfiguration für Technische Chartanalyse
+# ===========================================
+
+# Datenquellen
+data:
+  # Mögliche Datenpfade (erste verfügbare wird verwendet)
+  sources:
+    - "C:/Projekte/crt_250816/data/raw/sp500_first_10_years.csv"
+  #  - "data/sp500_data.csv"
+  #  - "data/test_data.parquet"
+  #  - "test_data.csv"
+  
+  # Unterstützte Dateiformate
+  supported_formats: [".csv", ".parquet"]
+
+# Technische Indikatoren
+indicators:
+  rsi:
+    period: 14
+    precision: 2
+  
+  ema:
+    spans: [12, 20, 26, 50, 100, 200]
+    precision: 4
+  
+  macd:
+    fast_period: 12
+    slow_period: 26
+    signal_period: 9
+    precision: 4
+
+# Extrema-Erkennung
+extrema:
+  candlestick:
+    slow_window: 5    # window_1
+    fast_window: 1    # window_2
+  
+  macd:
+    slow_window: 5
+    fast_window: 1
+
+# Divergenz-Analyse
+divergence:
+  # Hauptparameter
+  window: 5
+  candle_tolerance: 0.1    # Prozent
+  macd_tolerance: 3.25     # Prozent
+  
+  # RSI Toleranzen
+  rsi_tolerance: 2.0       # Absolute Differenz
+  rsi_tolerance_extended: 7.0  # 3.5 * rsi_tolerance für spezielle Fälle
+  
+  # Fokus auf Classic Bullish Divergenzen
+  types:
+    classic_enabled: true
+    hidden_enabled: false    # Zunächst deaktiviert
+    negative_macd_enabled: true
+
+# Visualisierung
+visualization:
+  theme:
+    background: "#242320"
+    crosshair_color: "#eefa"
+  
+  colors:
+    # Divergenz-Markierungen
+    lower_low: "red"
+    higher_low: "blue"
+    
+    # EMAs
+    ema_20: "#FF6B6B"
+    ema_50: "#4ECDC4"
+    ema_100: "#45B7D1"
+    ema_200: "#96CEB4"
+  
+  panels:
+    price:
+      title: "Preis & EMAs"
+      show_volume: false
+    
+    rsi:
+      title: "RSI"
+      y_range: [0, 100]
+      oversold: 30
+      overbought: 70
+    
+    macd:
+      title: "MACD Histogram"
+      show_signal_line: true
+
+# Logging
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  file: "chartanalyse.log"
+  format: "%(asctime)s - %(levelname)s - %(message)s"
+  console: true
+
+# Performance
+performance:
+  # Maximale Datensatzgröße für Speicher-Optimierung
+  max_rows_in_memory: 100000
+  
+  # Parallelisierung (für später)
+  use_multiprocessing: false
+  num_processes: 4
+  
+  # Caching (für später)
+  cache_indicators: false
+  cache_extrema: false
+
+# Entwicklung/Debug
+development:
+  debug_mode: false
+  save_intermediate_results: false
+  profiling: false
+  
+  # Test-Parameter
+  test:
+    sample_size: 1000  # Anzahl Zeilen für schnelle Tests
+    use_sample: false

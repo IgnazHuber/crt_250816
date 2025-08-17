@@ -215,4 +215,25 @@ class SimpleDivergenceWorkflow:
                 # Weiter?
                 continue_choice = input("\nWeitere Analyse? (j/n): ").strip().lower()
                 if continue_choice not in ['j', 'ja', 'y', 'yes']:
-                    print("\n👋 Auf Wiedersehen!
+                    print("\n👋 Auf Wiedersehen!")
+                    break
+                    
+            except KeyboardInterrupt:
+                print("\n\n⏹️ Workflow unterbrochen!")
+                break
+            except Exception as e:
+                logger.error(f"❌ Unerwarteter Fehler: {e}")
+                print(f"❌ Ein Fehler ist aufgetreten: {e}")
+                print("Versuche es erneut oder beende mit 'q'")
+
+
+def main():
+    """
+    Hauptfunktion
+    """
+    workflow = SimpleDivergenceWorkflow()
+    workflow.run_workflow()
+
+
+if __name__ == "__main__":
+    main()

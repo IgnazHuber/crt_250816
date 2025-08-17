@@ -7,8 +7,10 @@ import pandas as pd
 import numpy as np
 import logging
 from datetime import datetime
+from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog
+import os
 
 # Bestehende Module (die funktionieren)
 from Initialize_RSI_EMA_MACD import Initialize_RSI_EMA_MACD
@@ -17,8 +19,52 @@ from CBullDivg_Analysis_vectorized import CBullDivg_analysis
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+# Output-Ordner konfigurieren
+PROJECT_DIR = Path(__file__).parent.parent.parent  # Gehe 3 Ebenen hoch zu crt_250816
+OUTPUTS_DIR = PROJECT_DIR / "outputs" / "quick_analysis"
+OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+
+print(f"📁 Quick Test Output-Verzeichnis: {OUTPUTS_DIR}")
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+def fix_datetime_columns_for_excel(df):
+    """
+    Entfernt Zeitzonen-Informationen aus allen datetime Spalten für Excel-Export
+    """
+    df_copy = df.copy()
+    
+    for col in df_copy.columns:
+        # Prüfe verschiedene datetime-Typen
+        if df_copy[col].dtype == 'datetime64[ns, UTC]' or str(df_copy[col].dtype).startswith('datetime64[ns,'):
+            # Konvertiere zu timezone-naive datetime
+            df_copy[col] = pd.to_datetime(df_copy[col]).dt.tz_localize(None)
+        elif df_copy[col].dtype == 'object':
+            # Prüfe auf datetime objects mit timezone
+            if len(df_copy) > 0:
+                try:
+                    sample_val = df_copy[col].iloc[0]
+                    if hasattr(sample_val, 'tzinfo') and sample_val.tzinfo is not None:
+                        df_copy[col] = pd.to_datetime(df_copy[col]).dt.tz_localize(None)
+                except:
+                    pass
+    
+    # Spezielle Behandlung für die problematischen Spalten
+    datetime_cols = [
+        'date', 'CBullD_Lower_Low_date_gen', 'CBullD_Higher_Low_date_gen',
+        'CBullD_Lower_Low_date_neg_MACD', 'CBullD_Higher_Low_date_neg_MACD'
+    ]
+    
+    for col in datetime_cols:
+        if col in df_copy.columns:
+            try:
+                df_copy[col] = pd.to_datetime(df_copy[col]).dt.tz_localize(None)
+            except:
+                # Falls bereits timezone-naive
+                pass
+    
+    return df_copy
 
 def add_simple_hidden_bullish(df):
     """
@@ -332,32 +378,45 @@ def main():
     fig = create_enhanced_chart(df, hidden_signals, bearish_signals)
     fig.show()
     
-    # Excel Export
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    excel_file = f"quick_enhanced_analysis_{timestamp}.xlsx"
-    
+    # Excel Export im OUTPUTS-Ordner
     try:
-        # Datetime-Spalten für Excel vorbereiten
-        df_copy = df.copy()
-        df_copy['date'] = pd.to_datetime(df_copy['date']).dt.tz_localize(None)
-    
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        excel_file = OUTPUTS_DIR / f"quick_enhanced_analysis_{timestamp}.xlsx"
+        
+        # DataFrame für Excel vorbereiten (Timezone entfernen)
+        df_for_excel = fix_datetime_columns_for_excel(df)
+        
         with pd.ExcelWriter(excel_file, engine='openpyxl') as writer:
-            df_copy.to_excel(writer, sheet_name='Data', index=False)
+            df_for_excel.to_excel(writer, sheet_name='Data', index=False)
+            
+            # Zusammenfassung
+            summary = pd.DataFrame([
+                ['Classic Bullish', classic_count],
+                ['Negative MACD', neg_macd_count],
+                ['Hidden Bullish', len(hidden_signals)],
+                ['Classic Bearish', len(bearish_signals)],
+                ['TOTAL', classic_count + neg_macd_count + len(hidden_signals) + len(bearish_signals)]
+            ], columns=['Divergence Type', 'Count'])
+            summary.to_excel(writer, sheet_name='Summary', index=False)
+            
+            # Hidden Signals Details
+            if hidden_signals:
+                hidden_df = pd.DataFrame(hidden_signals)
+                hidden_df['date'] = pd.to_datetime(hidden_df['date']).dt.tz_localize(None)
+                hidden_df.to_excel(writer, sheet_name='Hidden_Signals', index=False)
+            
+            # Bearish Signals Details
+            if bearish_signals:
+                bearish_df = pd.DataFrame(bearish_signals)
+                bearish_df['date'] = pd.to_datetime(bearish_df['date']).dt.tz_localize(None)
+                bearish_df.to_excel(writer, sheet_name='Bearish_Signals', index=False)
+        
+        logger.info(f"📋 Excel exportiert: {excel_file}")
+        
     except Exception as e:
         logger.error(f"❌ Excel Export fehlgeschlagen: {e}")
         logger.info("🔄 Versuche ohne Excel Export fortzufahren...")
-        
-        # Zusammenfassung
-        summary = pd.DataFrame([
-            ['Classic Bullish', classic_count],
-            ['Negative MACD', neg_macd_count],
-            ['Hidden Bullish', len(hidden_signals)],
-            ['Classic Bearish', len(bearish_signals)],
-            ['TOTAL', classic_count + neg_macd_count + len(hidden_signals) + len(bearish_signals)]
-        ], columns=['Divergence Type', 'Count'])
-        summary.to_excel(writer, sheet_name='Summary', index=False)
     
-    logger.info(f"📋 Excel exportiert: {excel_file}")
     logger.info("✅ Erweiterte Analyse abgeschlossen!")
 
 if __name__ == "__main__":

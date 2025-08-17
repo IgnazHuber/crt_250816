@@ -3,8 +3,8 @@
 sensitivity_plotly.py – α/γ-Sensitivitäts-Overlay (Plotly, ohne Qt)
 
 Neu:
-- --no-variants / --no-ref: initiale Sichtbarkeit
-- --master-toggle: Updatemenü mit Buttons (Alle an/aus, Nur Varianten, Nur Referenz)
+- --master-toggle und --no-master-toggle (Default an)
+- Master-Buttons schalten NUR Varianten & Referenz, Basis (OHLC/EMA/RSI/MACD) bleibt sichtbar
 """
 
 import argparse
@@ -159,7 +159,10 @@ def parse_args():
     # Sichtbarkeit / Master-Toggle
     p.add_argument("--no-variants", action="store_true", help="Varianten initial ausblenden")
     p.add_argument("--no-ref", action="store_true", help="Referenz initial ausblenden")
-    p.add_argument("--master-toggle", action="store_true", default=True, help="Master-Toggle-Buttons einblenden")
+    # Akzeptiere beide Varianten:
+    p.add_argument("--master-toggle", dest="master_toggle", action="store_true", help="Master-Buttons anzeigen")
+    p.add_argument("--no-master-toggle", dest="master_toggle", action="store_false", help="Master-Buttons ausblenden")
+    p.set_defaults(master_toggle=True)
     return p.parse_args()
 
 # ---------------- Plot-Grundaufbau ----------------
@@ -183,11 +186,11 @@ def make_base_figure(df: pd.DataFrame, title: str) -> go.Figure:
         fig.add_hrect(y0=70, y1=70, line=dict(dash="dot"), fillcolor="rgba(0,0,0,0)", row=2, col=1)
         fig.add_hrect(y0=30, y1=30, line=dict(dash="dot"), fillcolor="rgba(0,0,0,0)", row=2, col=1)
     if "macd_histogram" in df.columns and not pd.Series(df["macd_histogram"]).isna().all():
-        fig.add_trace(go.Bar(x=_ts_series(df), y=df["macd_histogram"], name="MACD-Hist"), row=3, col=1)
+        fig.add_trace(go.Bar(x=ts, y=df["macd_histogram"], name="MACD-Hist"), row=3, col=1)
     if "macd" in df.columns and not pd.Series(df["macd"]).isna().all():
-        fig.add_trace(go.Scatter(x=_ts_series(df), y=df["macd"], mode="lines", name="MACD"), row=3, col=1)
+        fig.add_trace(go.Scatter(x=ts, y=df["macd"], mode="lines", name="MACD"), row=3, col=1)
     if "signal" in df.columns and not pd.Series(df["signal"]).isna().all():
-        fig.add_trace(go.Scatter(x=_ts_series(df), y=df["signal"], mode="lines", name="Signal"), row=3, col=1)
+        fig.add_trace(go.Scatter(x=ts, y=df["signal"], mode="lines", name="Signal"), row=3, col=1)
     fig.update_layout(
         title=title,
         xaxis_rangeslider_visible=False,
@@ -386,22 +389,28 @@ def save_xlsx(out_dir: Path, stamp: str, counts: pd.DataFrame,
 def add_master_toggle_buttons(fig: go.Figure):
     n = len(fig.data)
     # Indizes klassifizieren
+    base_names = {"OHLC","EMA 20","EMA 50","EMA 100","EMA 200","RSI","MACD","Signal","MACD-Hist"}
+    idx_base = [i for i, tr in enumerate(fig.data)
+                if (getattr(tr, "legendgroup", None) is None) and (getattr(tr, "name", "") in base_names)]
     idx_variants = [i for i, tr in enumerate(fig.data) if getattr(tr, "legendgroup", None) not in (None, "REF")]
     idx_ref      = [i for i, tr in enumerate(fig.data) if getattr(tr, "legendgroup", None) == "REF"]
-    # Hilfsfunktion Sichtbarkeitsvektor
+
     def vis_vec(all_on=False, all_off=False, only_variants=False, only_ref=False):
         v = [False]*n
+        # Basis immer sichtbar
+        for i in idx_base: v[i] = True
         if all_on:
-            v = [True]*n
+            for i in idx_variants + idx_ref: v[i] = True
         elif all_off:
-            v = [False]*n
+            pass  # nur Basis sichtbar
         elif only_variants:
             for i in idx_variants: v[i] = True
         elif only_ref:
             for i in idx_ref: v[i] = True
         else:
-            v = [True]*n
+            for i in idx_variants + idx_ref: v[i] = True
         return v
+
     fig.update_layout(
         updatemenus=[dict(
             type="buttons", direction="right", x=0.5, xanchor="center", y=1.13, yanchor="top",
@@ -446,10 +455,13 @@ def run_for_file(input_path: Path, args, alphas: list[float], gammas: list[float
     out_dir = PROJECT_ROOT / "results" / "sensitivity_overlay"; out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S"); base = f"{input_path.stem}_{stamp}"
     if args.save_csv:
-        (out_dir / f"overlay_counts_{base}.csv").write_text(df_counts.to_csv(index=False), encoding="utf-8")
+        df_counts.to_csv(out_dir / f"overlay_counts_{base}.csv", index=False)
+        print(f"[OK] CSV gespeichert: {out_dir / f'overlay_counts_{base}.csv'}")
     if args.save_html:
         fig_overlay.write_html(str(out_dir / f"overlay_plot_{base}.html"))
         fig_heatmap.write_html(str(out_dir / f"overlay_heatmap_{base}.html"))
+        print(f"[OK] HTML gespeichert: {out_dir / f'overlay_plot_{base}.html'}")
+        print(f"[OK] HTML gespeichert: {out_dir / f'overlay_heatmap_{base}.html'}")
     val_df = None
     if args.validate:
         base_ts = _ts_series(df)
@@ -475,6 +487,7 @@ def run_for_file(input_path: Path, args, alphas: list[float], gammas: list[float
                              "ref_gen": len(ts_ref_gen), "ref_neg": len(ts_ref_neg)})
         val_df = pd.DataFrame(vals)
         val_df.to_csv(out_dir / f"validation_{base}.csv", index=False)
+        print(f"[OK] Validierungsreport: {out_dir / f'validation_{base}.csv'}")
     if args.save_xlsx:
         save_xlsx(out_dir, base, df_counts, val_df, alphas, gammas)
     fig_overlay.show(); fig_heatmap.show()

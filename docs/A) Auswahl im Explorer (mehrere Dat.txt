@@ -1,0 +1,19 @@
+A) Auswahl im Explorer (mehrere Dateien, Pfad wird gemerkt)
+python scripts/rt/sensitivity_plotly.py `
+  --pick `
+  --lookback 5 `
+  --alpha-lin "0.04:0.24:5" `
+  --gamma-lin "2.0:5.0:5" `
+  --title "BTCUSD 1D – α/γ Sens (5×5)" `
+  --save-csv --save-html --save-xlsx `
+  --validate --match-tol-bars 2
+
+(B) Einzeldatei (ohne Explorer)
+python scripts/rt/sensitivity_plotly.py `
+  --input "data/raw/btc_1day_candlesticks_all.parquet" `
+  --lookback 5 `
+  --alpha-lin "0.04:0.24:5" `
+  --gamma-lin "2.0:5.0:5" `
+  --title "BTCUSD 1D – α/γ Sens (5×5)" `
+  --save-csv --save-html --save-xlsx `
+  --validate --match-tol-bars 2

@@ -1,15 +1,33 @@
-repos:
-  - repo: https://github.com/psf/black
-    rev: 24.4.2
-    hooks:
-      - id: black
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
 
-  - repo: https://github.com/pycqa/flake8
-    rev: 6.1.0
-    hooks:
-      - id: flake8
+# Virtual Environment
+.venv/
+env/
+ENV/
+env.bak/
 
-  - repo: https://github.com/pre-commit/mirrors-isort
-    rev: v5.13.2
-    hooks:
-      - id: isort
+# Data & Results (große Daten/Output rauslassen!)
+ data/
+# analysis_results/
+# results/
+# *.csv
+ *.parquet
+
+# IDEs/Editoren
+.vscode/
+.idea/
+.DS_Store
+
+# Sonstiges
+*.log
+*.pdf
+*.xlsx
+*.png
+*.html
+

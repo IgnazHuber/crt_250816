@@ -184,22 +184,27 @@ def Initialize_RSI_EMA_MACD(df: pd.DataFrame) -> Optional[pd.DataFrame]:
         ema_data = {}
 
         for span in EMA_SPANS:
+            # Calculate EMA with high precision
             ema_series = (
                 df["close"]
                 .astype(CALCULATION_PRECISION)
                 .ewm(span=span, adjust=False)
                 .mean()
             )
+            # Apply precision rounding to prevent accumulation errors
             ema_rounded = np.array(
                 [precise_round(ema, STORAGE_PRECISION["ema"]) for ema in ema_series]
             )
             ema_data[f"EMA_{span}"] = ema_rounded
 
+        # Bulk assignment of EMAs
         for col_name, values in ema_data.items():
             df[col_name] = values
 
         # PRECISION: High-precision MACD calculation
         logger.debug("Calculating MACD with precision control...")
+
+        # Calculate MACD with controlled precision
         macd_raw = ema_data["EMA_12"] - ema_data["EMA_26"]
         macd_precise = np.array(
             [precise_round(m, STORAGE_PRECISION["macd"]) for m in macd_raw]
@@ -223,6 +228,7 @@ def Initialize_RSI_EMA_MACD(df: pd.DataFrame) -> Optional[pd.DataFrame]:
 
         macd_data = {"signal": signal_precise, "macd_histogram": histogram_precise}
 
+        # Bulk assignment of MACD indicators
         for col_name, values in macd_data.items():
             df[col_name] = values
 

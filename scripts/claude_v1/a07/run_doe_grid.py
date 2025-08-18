@@ -1,26 +1,20 @@
 # -*- coding: utf-8 -*-
 # file: run_doe_grid.py
 """
-DOE-Runner (Flags, CSV + Heatmaps + 3D-Scatter + 3D-Surface PNGs)
+DOE-Runner (Flags, CSV + Heatmaps + 3D-Scatter PNGs)
 
-Beibehaltende Features:
+Features:
 - Ranges: a..b..s oder a:b:s; Singletons ok (a==b → [a])
 - --verbose zeigt je Kombination die tatsächlich gezählten Werte
 - CSV nach --out (Default: C:\\Projekte\\crt_250816\\results)
-- Robuste Rückfallzählung aus 'details' DataFrame, falls Return-Counts 0/0 sind
+- Automatisch erzeugte Grafiken:
+    * Heatmaps (pro window) als Pivot über candle_tolerance × macd_tolerance
+      - sowohl für classic_count als auch neg_macd_count
+    * 3D-Scatter (Achsen: window, candle_tolerance, macd_tolerance; Farbe = Metrik)
+      - separat für classic_count und neg_macd_count
 
-Neue Visualisierungen (werden immer erzeugt):
-- Heatmaps (pro window) als Pivot über candle_tolerance × macd_tolerance
-  * jeweils für: classic_count, neg_macd_count
-- 3D-Scatter (Achsen: window, candle_tolerance, macd_tolerance; Farbe = Metrik)
-  * separat für: classic_count, neg_macd_count
-- 3D-Surface pro window (x=candle_tolerance, y=macd_tolerance, z=metric) mit Triangulation
-  * separat für: classic_count, neg_macd_count
-
-Hinweis:
-- Eine 3D-Surface benötigt z=f(x,y). Daher wird für jede feste window-Stufe eine eigene Surface geplottet
-  (x=ct, y=mt, z=metric). Der globale 3D-Scatter zeigt alle drei Parameter gleichzeitig; die Metrik wird
-  über die Punktfarbe codiert.
+Hinweis: Ein 3D-Plot kann nur drei Dimensionen direkt tragen. Da wir drei Parameter (w, ct, mt) und
+eine Zielgröße (z.B. classic_count) haben, wird die Zielgröße über die Punkt-Farbe codiert (4D→3D+Farbe).
 """
 
 from __future__ import annotations
@@ -32,8 +26,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import matplotlib
 matplotlib.use("Agg")  # headless PNG-Export
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
-import matplotlib.tri as mtri
+from mpl_toolkits.mplot3d import Axes3D  # noqa: F401  (import side-effect: 3d proj)
 
 try:
     import pandas as pd
@@ -140,7 +133,9 @@ def _save_heatmaps(df: "pd.DataFrame", out_dir: str) -> List[str]:
     for metric in ("classic_count", "neg_macd_count"):
         for w in sorted(df["window"].unique()):
             sub = df[df["window"] == w].copy()
+            # Pivot bauen
             piv = sub.pivot(index="candle_tolerance", columns="macd_tolerance", values=metric)
+            # sortierte Achsen
             piv = piv.sort_index().sort_index(axis=1)
 
             fig, ax = plt.subplots(figsize=(10, 6), dpi=140)
@@ -149,11 +144,13 @@ def _save_heatmaps(df: "pd.DataFrame", out_dir: str) -> List[str]:
             ax.set_xlabel("macd_tolerance")
             ax.set_ylabel("candle_tolerance")
 
+            # Ticks/Labels
             ax.set_xticks(range(len(piv.columns)))
             ax.set_xticklabels([str(round(x, 6)).rstrip("0").rstrip(".") for x in piv.columns], rotation=45, ha="right")
             ax.set_yticks(range(len(piv.index)))
             ax.set_yticklabels([str(round(y, 6)).rstrip("0").rstrip(".") for y in piv.index])
 
+            # Werte annotieren
             for i in range(piv.shape[0]):
                 for j in range(piv.shape[1]):
                     val = piv.values[i, j]
@@ -169,7 +166,7 @@ def _save_heatmaps(df: "pd.DataFrame", out_dir: str) -> List[str]:
 
 def _save_3d_scatter(df: "pd.DataFrame", out_dir: str) -> List[str]:
     """
-    3D-Scatter (Achsen: window, candle_tolerance, macd_tolerance; Farbe = Metrik).
+    Erzeugt 3D-Scatter Plots (Achsen: window, candle_tolerance, macd_tolerance; Farbe = Metrik).
     Je eine Grafik für classic_count und neg_macd_count.
     """
     if pd is None or df.empty:
@@ -194,47 +191,6 @@ def _save_3d_scatter(df: "pd.DataFrame", out_dir: str) -> List[str]:
         fig.savefig(out_path, bbox_inches="tight")
         plt.close(fig)
         paths.append(out_path)
-    return paths
-
-def _save_3d_surfaces(df: "pd.DataFrame", out_dir: str) -> List[str]:
-    """
-    3D-Surface pro window:
-      x = candle_tolerance, y = macd_tolerance, z = metric
-    - Für unregelmäßige Gitter nutzen wir Triangulation (plot_trisurf).
-    - Je eine Grafik für classic_count und neg_macd_count.
-    """
-    if pd is None or df.empty:
-        return []
-    paths: List[str] = []
-    for metric in ("classic_count", "neg_macd_count"):
-        for w in sorted(df["window"].unique()):
-            sub = df[df["window"] == w].copy()
-            if sub.empty:
-                continue
-            x = sub["candle_tolerance"].astype(float).values
-            y = sub["macd_tolerance"].astype(float).values
-            z = sub[metric].astype(float).values
-
-            fig = plt.figure(figsize=(10, 7), dpi=140)
-            ax = fig.add_subplot(111, projection="3d")
-            try:
-                triang = mtri.Triangulation(x, y)
-                surf = ax.plot_trisurf(triang, z, linewidth=0.2, antialiased=True)
-            except Exception:
-                # Fallback: wenn Triangulation schief geht -> Punkte als Wireframe-ähnliche Linie
-                surf = ax.plot3D(x, y, z)
-
-            ax.set_title(f"3D Surface ({metric}) – window={w}")
-            ax.set_xlabel("candle_tolerance")
-            ax.set_ylabel("macd_tolerance")
-            ax.set_zlabel(metric)
-            if hasattr(surf, "axes"):  # nur wenn Surface-Objekt vorhanden (nicht bei fallback)
-                fig.colorbar(surf, ax=ax, shrink=0.75)
-            fig.tight_layout()
-            out_path = os.path.join(out_dir, f"doe_3dsurface_{metric}_w{w}.png")
-            fig.savefig(out_path, bbox_inches="tight")
-            plt.close(fig)
-            paths.append(out_path)
     return paths
 
 # ---------------------------
@@ -322,7 +278,7 @@ def main():
         tot = r["classic_count"] + r["neg_macd_count"]
         print(f" {j:>2}. w={r['window']} ct={r['candle_tolerance']} mt={r['macd_tolerance']}  -> C={r['classic_count']}, N={r['neg_macd_count']} (Tot={tot})")
 
-    # ---- Grafiken: Heatmaps + 3D-Scatter + 3D-Surface ----
+    # ---- Grafiken: Heatmaps + 3D-Scatter ----
     if pd is None:
         print("[Warn] pandas nicht verfügbar – Grafiken werden übersprungen.")
         return
@@ -336,10 +292,6 @@ def main():
     scatter_paths = _save_3d_scatter(df, out_dir)
     for p in scatter_paths:
         print(f"[Plot] 3D-Scatter gespeichert: {p}")
-
-    surface_paths = _save_3d_surfaces(df, out_dir)
-    for p in surface_paths:
-        print(f"[Plot] 3D-Surface gespeichert: {p}")
 
 
 if __name__ == "__main__":

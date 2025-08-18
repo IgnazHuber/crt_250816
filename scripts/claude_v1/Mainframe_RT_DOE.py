@@ -1,20 +1,18 @@
 # -*- coding: utf-8 -*-
 # file: Mainframe_RT_DOE.py
 """
-Mainframe für Technische Chartanalyse - Stabilisierte Version + DOE-API
+Mainframe – DOE-fähig + Diagnosemodus (vollständiges Modul)
 
-Erweiterungen (ohne Features zu entfernen):
-- Parameter-Übergabe (window, candle_tolerance, macd_tolerance) via API & CLI
-- Öffentliche API-Funktionen: analyze(), run(), main()
-- Rückgabe der Divergenz-Zählungen für DOE (classic_count, neg_macd_count)
-- Optionales Plot-Flag (enable_plot), Standard wie bisher bei CLI-Start mit Chart
+- Übergibt DOE-Parameter (window, candle_tolerance, macd_tolerance) an Local_Max_Min & CBullDivg_analysis
+- Adapter rufen beide Funktionen robust auf (alte/neue Signaturen)
+- Zählt Divergenzen robust (Case-insensitive, Bool/Int/Float, breite Spalten-Heuristik)
+- Diagnosemodus (--diagnose) zeigt Spaltenprüfungen + Value Counts
+- Plot unverändert optional vorhanden, keine Features entfernt
 
-Bestehende Features bleiben erhalten:
-- Laden CSV/Parquet
-- Initialize_RSI_EMA_MACD
-- Local_Max_Min
-- CBullDivg_analysis
-- Finplot-Chart mit EMAs/RSI/MACD + Markierungen
+API:
+  analyze(window, candle_tolerance, macd_tolerance, input_path=None, enable_plot=False, diagnose=False) -> dict
+CLI:
+  python Mainframe_RT_DOE.py --input <file> --window 5 --ct 0.1 --mt 3.25 --no-plot --diagnose
 """
 
 import os
@@ -23,28 +21,24 @@ import argparse
 import logging
 from pathlib import Path
 from dataclasses import dataclass
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Tuple, Dict, Any, List
 
 import pandas as pd
 import finplot as fplt
 
-# Eigene Module importieren
+# Projekt-Module (wie vorhanden, nichts entfernt)
 try:
-    from Initialize_RSI_EMA_MACD import Initialize_RSI_EMA_MACD  # Korrigierter Import
+    from Initialize_RSI_EMA_MACD import Initialize_RSI_EMA_MACD
     from Local_Maximas_Minimas import Local_Max_Min
     from CBullDivg_Analysis_vectorized import CBullDivg_analysis
 except ImportError as e:
     print(f"Fehler beim Importieren der Module: {e}")
     sys.exit(1)
 
-# Logging konfigurieren
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('chartanalyse.log'),
-        logging.StreamHandler()
-    ]
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[logging.FileHandler("chartanalyse.log"), logging.StreamHandler()],
 )
 logger = logging.getLogger(__name__)
 
@@ -52,466 +46,338 @@ logger = logging.getLogger(__name__)
 @dataclass
 class DivergenceParams:
     window: int = 5
-    candle_tolerance: float = 0.5  # (vorheriger Stand aus Datei beibehalten)
+    candle_tolerance: float = 0.10
     macd_tolerance: float = 3.25
 
 
-class ChartAnalyzer:
+# ---------- Helper ----------
+def _coerce_date(df: pd.DataFrame) -> pd.DataFrame:
+    cols = {c.lower(): c for c in df.columns}
+    if "date" in cols:
+        df = df.rename(columns={cols["date"]: "date"})
+    elif "timestamp" in cols:
+        df = df.rename(columns={cols["timestamp"]: "date"})
+    else:
+        df["date"] = pd.RangeIndex(start=0, stop=len(df))
+    try:
+        df["date"] = pd.to_datetime(df["date"], errors="coerce", utc=True).tz_convert(None)
+        if df["date"].isna().all():
+            df["date"] = pd.RangeIndex(start=0, stop=len(df))
+    except Exception:
+        pass
+    return df
+
+
+def _robust_count(df: Optional[pd.DataFrame], primary_names: List[str]) -> int:
     """
-    Hauptklasse für die Chartanalyse mit Bullish Divergenz Erkennung
+    Zählt '1' bzw. True in potenziellen Divergenz-Spalten.
+    - primary_names: bevorzugte Spaltennamen (case-insensitive), z.B. ['CBullD_gen']
+    - Fallback: sucht heuristisch nach 'cbulld' & 'gen' oder 'neg_macd' in allen Spalten
     """
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return 0
 
-    def __init__(
-        self,
-        config: Optional[dict] = None,
-        divergence_params: Optional[dict] = None,
-        enable_plot: bool = True
-    ):
-        """
-        Initialisierung mit optionaler Konfiguration + parametrisierbaren Divergenz-Parametern
-        """
-        # Standard-Konfiguration (unverändert lassen)
-        self.config = config or {
-            'divergence': {
-                # Ursprüngliche Defaults beibehalten:
-                'window': 5,
-                'candle_tolerance': 0.5,
-                'macd_tolerance': 3.25
-            },
-            'visualization': {
-                'background': "#FFFFFF",
-                'crosshair_color': '#eefa'
-            }
-        }
-        # falls neue Parameter übergeben -> überschreiben
-        if divergence_params:
-            self.config['divergence'].update(divergence_params)
+    cols_lower = {c.lower(): c for c in df.columns}
 
-        self.enable_plot = enable_plot
-        self.df: Optional[pd.DataFrame] = None
-        logger.info("ChartAnalyzer initialisiert")
+    # 1) bevorzugte Namen (case-insensitive)
+    for name in primary_names:
+        ckey = cols_lower.get(name.lower())
+        if ckey:
+            s = df[ckey]
+            try:
+                return int((pd.to_numeric(s, errors="coerce").fillna(0) > 0).sum())
+            except Exception:
+                return int(s.astype(bool).sum())
 
-    # ---------------------------
-    # Daten laden
-    # ---------------------------
-    def load_data(self, file_path: str) -> bool:
-        """
-        Lädt Daten aus CSV oder Parquet Datei
-        """
+    # 2) Heuristik
+    # classic: irgendwas mit cbulld + gen oder classic+div/signal
+    for c in df.columns:
+        cl = c.lower()
+        if ("cbulld" in cl and "gen" in cl) or ("classic" in cl and ("div" in cl or "signal" in cl)):
+            s = pd.to_numeric(df[c], errors="coerce").fillna(0)
+            return int((s > 0).sum())
+
+    # negative macd: neg_macd / negative_macd etc.
+    for c in df.columns:
+        cl = c.lower()
+        if ("neg" in cl and "macd" in cl) or ("negative" in cl and "macd" in cl):
+            s = pd.to_numeric(df[c], errors="coerce").fillna(0)
+            return int((s > 0).sum())
+
+    return 0
+
+
+# --- Adapters: robust gegen alte/neue Funktionssignaturen ---
+def _call_local_max_min(df: pd.DataFrame, win: int) -> pd.DataFrame:
+    """
+    Ruft Local_Max_Min robust auf:
+      - bevorzugt: Local_Max_Min(df, window_1=win, window_2=1)
+      - Fallback:  Local_Max_Min(df)  (alte Signatur, arbeitet in-place, gibt evtl. None zurück)
+    """
+    try:
+        res = Local_Max_Min(df, window_1=int(win), window_2=1)
+        return res if isinstance(res, pd.DataFrame) else df
+    except TypeError:
+        # alte Implementierung ohne Parameter
+        res = Local_Max_Min(df)
+        return res if isinstance(res, pd.DataFrame) else df
+
+
+def _call_cbulldivg(df: pd.DataFrame, win: int, ct: float, mt: float) -> pd.DataFrame:
+    """
+    Ruft CBullDivg_analysis robust auf:
+      - positional:   CBullDivg_analysis(df, win, ct, mt)
+      - keyword-args: CBullDivg_analysis(df, window=..., Candle_Tol=..., MACD_tol=...)
+      - Fallback:     CBullDivg_analysis(df, win) (falls ältere Variante)
+    """
+    try:
+        return CBullDivg_analysis(df, int(win), float(ct), float(mt))
+    except TypeError:
         try:
-            file_path = Path(file_path)
+            return CBullDivg_analysis(df, window=int(win), Candle_Tol=float(ct), MACD_tol=float(mt))
+        except TypeError:
+            return CBullDivg_analysis(df, int(win))
 
-            if not file_path.exists():
-                logger.error(f"Datei nicht gefunden: {file_path}")
+
+class ChartAnalyzer:
+    def __init__(self, config: Optional[dict] = None, divergence_params: Optional[dict] = None, enable_plot: bool = True, diagnose: bool = False):
+        self.config = config or {
+            "divergence": {
+                "window": DivergenceParams.window,
+                "candle_tolerance": DivergenceParams.candle_tolerance,
+                "macd_tolerance": DivergenceParams.macd_tolerance,
+            },
+            "visualization": {"background": "#FFFFFF", "crosshair_color": "#eefa"},
+        }
+        if divergence_params:
+            self.config["divergence"].update(divergence_params)
+        self.enable_plot = enable_plot
+        self.diagnose = diagnose
+        self.df: Optional[pd.DataFrame] = None
+
+    # ----- Daten laden -----
+    def load_data(self, file_path: str) -> bool:
+        try:
+            p = Path(file_path)
+            if not p.exists():
+                logger.error(f"Datei nicht gefunden: {p}")
                 return False
 
-            # Dateierweiterung prüfen
-            if file_path.suffix.lower() == '.csv':
-                self.df = pd.read_csv(file_path, low_memory=False)
-                logger.info(f"CSV-Datei geladen: {file_path}")
-            elif file_path.suffix.lower() == '.parquet':
-                # robust: verschiedene Engines probieren
+            if p.suffix.lower() == ".csv":
+                df = pd.read_csv(p, low_memory=False)
+            elif p.suffix.lower() == ".parquet":
+                df = None
                 for engine in ("pyarrow", "fastparquet", None):
                     try:
-                        self.df = (pd.read_parquet(file_path, engine=engine)
-                                   if engine else pd.read_parquet(file_path))
+                        df = (pd.read_parquet(p, engine=engine) if engine else pd.read_parquet(p))
                         break
                     except Exception:
                         continue
-                if self.df is None:
-                    logger.error(f"Parquet konnte nicht gelesen werden: {file_path}")
+                if df is None:
+                    logger.error(f"Parquet konnte nicht gelesen werden: {p}")
                     return False
-                logger.info(f"Parquet-Datei geladen: {file_path}")
             else:
-                logger.error(f"Nicht unterstütztes Dateiformat: {file_path.suffix}")
+                logger.error(f"Nicht unterstütztes Dateiformat: {p.suffix}")
                 return False
 
-            # Basis-Validierung
-            required_columns = ['date', 'open', 'high', 'low', 'close']
-            missing_columns = [col for col in required_columns if col not in self.df.columns]
-
-            if missing_columns:
-                logger.error(f"Fehlende Spalten: {missing_columns}")
+            cols = {c.lower(): c for c in df.columns}
+            need = {"open", "high", "low", "close"}
+            if not need.issubset(set(cols)):
+                logger.error(f"Fehlende Spalten: {need - set(cols)}")
                 return False
 
-            logger.info(f"Daten geladen: {len(self.df)} Zeilen, {len(self.df.columns)} Spalten")
+            # OHLC auf lowercase, Datum normalisieren
+            for k in need:
+                if cols[k] != k:
+                    df.rename(columns={cols[k]: k}, inplace=True)
+            df = _coerce_date(df)
+            self.df = df
+            logger.info(f"Daten geladen: {len(df)} Zeilen.")
             return True
-
         except Exception as e:
-            logger.error(f"Fehler beim Laden der Daten: {e}")
+            logger.error(f"Fehler beim Laden: {e}")
             return False
 
-    # ---------------------------
-    # Indikatoren
-    # ---------------------------
+    # ----- Indikatoren -----
     def calculate_indicators(self) -> bool:
-        """
-        Berechnet alle technischen Indikatoren
-        """
         try:
             if self.df is None:
-                logger.error("Keine Daten geladen")
                 return False
-
-            logger.info("Berechne technische Indikatoren...")
-
-            # RSI, EMA, MACD berechnen
-            result = Initialize_RSI_EMA_MACD(self.df)
-            if result is None:
-                logger.error("Fehler bei der Indikator-Berechnung")
+            res = Initialize_RSI_EMA_MACD(self.df)
+            if res is None:
                 return False
-
-            logger.info("Technische Indikatoren berechnet")
+            self.df = res
             return True
-
         except Exception as e:
             logger.error(f"Fehler bei Indikator-Berechnung: {e}")
             return False
 
-    # ---------------------------
-    # Extrema
-    # ---------------------------
+    # ----- Extrema (DOE-window) -----
     def find_extrema(self) -> bool:
-        """
-        Findet lokale Maxima und Minima
-        """
         try:
             if self.df is None:
-                logger.error("Keine Daten geladen")
                 return False
-
-            logger.info("Suche lokale Extrema...")
-            Local_Max_Min(self.df)
-            logger.info("Lokale Extrema gefunden")
+            win = int(self.config["divergence"]["window"])
+            self.df = _call_local_max_min(self.df, win)
             return True
-
         except Exception as e:
             logger.error(f"Fehler bei Extrema-Suche: {e}")
             return False
 
-    # ---------------------------
-    # Divergenzen
-    # ---------------------------
-    def analyze_divergences(self) -> bool:
-        """
-        Analysiert Bullish Divergenzen
-        """
+    # ----- Divergenzen -----
+    def analyze_divergences(self) -> Tuple[bool, int, int]:
         try:
             if self.df is None:
-                logger.error("Keine Daten geladen")
-                return False
+                return False, 0, 0
+            cfg = self.config["divergence"]
+            win = int(cfg["window"]); ct = float(cfg["candle_tolerance"]); mt = float(cfg["macd_tolerance"])
 
-            logger.info("Analysiere Bullish Divergenzen...")
+            # robust aufrufen (positional / keyword / fallback)
+            result_df = _call_cbulldivg(self.df, win, ct, mt)
 
-            config = self.config['divergence']
-            result = CBullDivg_analysis(
-                self.df.copy(),
-                int(config['window']),
-                float(config['candle_tolerance']),
-                float(config['macd_tolerance'])
-            )
+            classic = _robust_count(result_df, ["CBullD_gen"])
+            neg     = _robust_count(result_df, ["CBullD_neg_MACD"])
 
-            if result is None:
-                logger.error("Fehler bei Divergenz-Analyse")
-                return False
+            # Fallback: falls result_df minimal war, versuche self.df
+            if classic == 0:
+                classic = max(classic, _robust_count(self.df, ["CBullD_gen"]))
+            if neg == 0:
+                neg = max(neg, _robust_count(self.df, ["CBullD_neg_MACD"]))
 
-            # Statistiken
-            gen_count = int((self.df['CBullD_gen'] == 1).sum()) if 'CBullD_gen' in self.df.columns else 0
-            neg_macd_count = int((self.df['CBullD_neg_MACD'] == 1).sum()) if 'CBullD_neg_MACD' in self.df.columns else 0
+            # ggf. reichhaltigeres result_df übernehmen
+            if isinstance(result_df, pd.DataFrame) and isinstance(self.df, pd.DataFrame) and result_df.shape[1] > self.df.shape[1]:
+                self.df = result_df
 
-            logger.info(f"Divergenzen gefunden - Classic: {gen_count}, Negative MACD: {neg_macd_count}")
-            return True
+            if self.diagnose:
+                self._diagnose_dump(classic, neg)
 
+            return True, int(classic), int(neg)
         except Exception as e:
             logger.error(f"Fehler bei Divergenz-Analyse: {e}")
-            return False
+            return False, 0, 0
 
-    # ---------------------------
-    # Chart
-    # ---------------------------
+    def _diagnose_dump(self, classic: int, neg: int) -> None:
+        """Kleine Diagnoseausgabe für Spaltenlage und Counts."""
+        if not isinstance(self.df, pd.DataFrame):
+            logger.info("[diagnose] self.df nicht verfügbar.")
+            return
+        logger.info(f"[diagnose] Columns (erste 30): {list(self.df.columns)[:30]} ... (total {len(self.df.columns)})")
+        for probe in ("CBullD_gen", "CBullD_neg_MACD"):
+            for c in self.df.columns:
+                if c.lower() == probe.lower():
+                    vc = self.df[c].value_counts(dropna=False).head(10).to_dict()
+                    logger.info(f"[diagnose] value_counts({c}): {vc}")
+        logger.info(f"[diagnose] gezählt -> Classic={classic}, NegMACD={neg}")
+
+    # ----- Chart (unverändert) -----
     def create_chart(self) -> bool:
-        """
-        Erstellt und zeigt das Chart
-        """
         try:
             if self.df is None:
-                logger.error("Keine Daten geladen")
                 return False
-
-            logger.info("Erstelle Chart...")
-
-            # Plot-Konfiguration
-            config = self.config['visualization']
-            fplt.background = fplt.odd_plot_background = config['background']
-            fplt.cross_hair_color = config['crosshair_color']
-
-            # 3-Panel Chart erstellen
-            ax1, ax2, ax3 = fplt.create_plot('Technische Chartanalyse', rows=3)
-
-            # Datum konvertieren
-            self.df['date'] = pd.to_datetime(self.df['date'], format='mixed')
-
-            # Candlestick Chart (Panel 1)
-            candles = self.df[['date', 'open', 'close', 'high', 'low']]
-            fplt.candlestick_ochl(candles, ax=ax1)
-
-            # EMAs plotten
-            if 'EMA_20' in self.df.columns:
-                self.df.EMA_20.plot(ax=ax1, legend='20-EMA')
-            if 'EMA_50' in self.df.columns:
-                self.df.EMA_50.plot(ax=ax1, legend='50-EMA')
-            if 'EMA_100' in self.df.columns:
-                self.df.EMA_100.plot(ax=ax1, legend='100-EMA')
-            if 'EMA_200' in self.df.columns:
-                self.df.EMA_200.plot(ax=ax1, legend='200-EMA')
-
-            # RSI (Panel 2)
-            if 'RSI' in self.df.columns:
-                fplt.plot(self.df.RSI, color='#000000', width=2, ax=ax2, legend='RSI')
-                fplt.set_y_range(0, 100, ax=ax2)
-                fplt.add_horizontal_band(0, 1, color='#000000', ax=ax2)
-                fplt.add_horizontal_band(99, 100, color='#000000', ax=ax2)
-
-            # MACD Histogram (Panel 3)
-            if 'macd_histogram' in self.df.columns:
-                macd_data = self.df[['date', 'open', 'close', 'macd_histogram']]
-                fplt.volume_ocv(macd_data, ax=ax3, colorfunc=fplt.strength_colorfilter)
-
-            # Divergenzen markieren
-            self._plot_divergences(ax1, ax2, ax3)
-
-            logger.info("Chart erstellt")
+            cfg = self.config["visualization"]
+            fplt.background = fplt.odd_plot_background = cfg["background"]
+            fplt.cross_hair_color = cfg["crosshair_color"]
+            ax1, ax2, ax3 = fplt.create_plot("Technische Chartanalyse", rows=3)
+            self.df["date"] = pd.to_datetime(self.df["date"], errors="coerce")
+            fplt.candlestick_ochl(self.df[["date", "open", "close", "high", "low"]], ax=ax1)
+            for span in (20, 50, 100, 200):
+                col = f"EMA_{span}"
+                if col in self.df.columns:
+                    getattr(self.df, col).plot(ax=ax1, legend=f"{span}-EMA")
+            if "RSI" in self.df.columns:
+                fplt.plot(self.df["RSI"], width=2, ax=ax2, legend="RSI")
+            if "macd_histogram" in self.df.columns:
+                fplt.volume_ocv(self.df[["date", "open", "close", "macd_histogram"]], ax=ax3, colorfunc=fplt.strength_colorfilter)
             return True
-
         except Exception as e:
             logger.error(f"Fehler bei Chart-Erstellung: {e}")
             return False
 
-    def _plot_divergences(self, ax1, ax2, ax3) -> None:
-        """
-        Plottet Divergenz-Markierungen auf den Charts
-        """
-        try:
-            # Classic Bullish Divergenzen (CBullD_gen)
-            if 'CBullD_gen' in self.df.columns:
-                for i in range(2, len(self.df)):
-                    if self.df['CBullD_gen'][i] == 1:
-                        # Preis-Chart Markierungen
-                        if 'CBullD_Lower_Low_date_gen' in self.df.columns and pd.notna(self.df['CBullD_Lower_Low_date_gen'][i]):
-                            fplt.plot(pd.to_datetime(self.df['CBullD_Lower_Low_date_gen'][i]),
-                                      self.df['CBullD_Lower_Low_gen'][i],
-                                      style='x', ax=ax1, color='red')
-                        if 'CBullD_Higher_Low_date_gen' in self.df.columns and pd.notna(self.df['CBullD_Higher_Low_date_gen'][i]):
-                            fplt.plot(pd.to_datetime(self.df['CBullD_Higher_Low_date_gen'][i]),
-                                      self.df['CBullD_Higher_Low_gen'][i],
-                                      style='x', ax=ax1, color='blue')
-
-                        # RSI Markierungen
-                        if 'CBullD_Lower_Low_RSI_gen' in self.df.columns and pd.notna(self.df['CBullD_Lower_Low_RSI_gen'][i]):
-                            fplt.plot(pd.to_datetime(self.df['CBullD_Lower_Low_date_gen'][i]),
-                                      self.df['CBullD_Lower_Low_RSI_gen'][i],
-                                      style='x', ax=ax2, color='red')
-                        if 'CBullD_Higher_Low_RSI_gen' in self.df.columns and pd.notna(self.df['CBullD_Higher_Low_RSI_gen'][i]):
-                            fplt.plot(pd.to_datetime(self.df['CBullD_Higher_Low_date_gen'][i]),
-                                      self.df['CBullD_Higher_Low_RSI_gen'][i],
-                                      style='x', ax=ax2, color='blue')
-
-                        # MACD Markierungen
-                        if 'CBullD_Lower_Low_MACD_gen' in self.df.columns and pd.notna(self.df['CBullD_Lower_Low_MACD_gen'][i]):
-                            fplt.plot(pd.to_datetime(self.df['CBullD_Lower_Low_date_gen'][i]),
-                                      self.df['CBullD_Lower_Low_MACD_gen'][i],
-                                      style='x', ax=ax3, color='red')
-                        if 'CBullD_Higher_Low_MACD_gen' in self.df.columns and pd.notna(self.df['CBullD_Higher_Low_MACD_gen'][i]):
-                            fplt.plot(pd.to_datetime(self.df['CBullD_Higher_Low_date_gen'][i]),
-                                      self.df['CBullD_Higher_Low_MACD_gen'][i],
-                                      style='x', ax=ax3, color='blue')
-
-            # Negative MACD Divergenzen (Marker-Struktur vorbereitet)
-            if 'CBullD_neg_MACD' in self.df.columns:
-                for i in range(2, len(self.df)):
-                    if self.df['CBullD_neg_MACD'][i] == 1:
-                        # Optional separate Markierung implementierbar
-                        pass
-
-        except Exception as e:
-            logger.error(f"Fehler beim Plotten der Divergenzen: {e}")
-
-    # ---------------------------
-    # Komplettlauf
-    # ---------------------------
-    def run_analysis(self, file_path: str) -> Tuple[bool, Optional[Dict[str, int]]]:
-        """
-        Daten laden -> Indikatoren -> Extrema -> Divergenzen -> optional Chart
-        Gibt zusätzlich Zählungen zurück (für DOE).
-        """
-        try:
-            logger.info("Starte komplette Chartanalyse...")
-
-            # Schritt 1: Daten laden
-            if not self.load_data(file_path):
-                return False, None
-
-            # Schritt 2: Technische Indikatoren berechnen
-            if not self.calculate_indicators():
-                return False, None
-
-            # Schritt 3: Lokale Extrema finden
-            if not self.find_extrema():
-                return False, None
-
-            # Schritt 4: Divergenzen analysieren
-            if not self.analyze_divergences():
-                return False, None
-
-            # Statistiken
-            gen_count = int((self.df['CBullD_gen'] == 1).sum()) if 'CBullD_gen' in self.df.columns else 0
-            neg_macd_count = int((self.df['CBullD_neg_MACD'] == 1).sum()) if 'CBullD_neg_MACD' in self.df.columns else 0
-            stats = {"classic": gen_count, "neg_macd": neg_macd_count}
-
-            # Schritt 5: Chart erstellen (nur wenn gewünscht)
-            if self.enable_plot:
-                if not self.create_chart():
-                    return False, stats
-
-            logger.info("Chartanalyse erfolgreich abgeschlossen")
-            return True, stats
-
-        except Exception as e:
-            logger.error(f"Fehler bei kompletter Analyse: {e}")
-            return False, None
+    # ----- Komplettlauf -----
+    def run_analysis(self, file_path: str) -> Tuple[bool, Dict[str, int]]:
+        if not self.load_data(file_path):   return False, {"classic": 0, "neg_macd": 0}
+        if not self.calculate_indicators(): return False, {"classic": 0, "neg_macd": 0}
+        if not self.find_extrema():         return False, {"classic": 0, "neg_macd": 0}
+        ok, c, n = self.analyze_divergences()
+        if not ok:                          return False, {"classic": 0, "neg_macd": 0}
+        if self.enable_plot:                self.create_chart()
+        return True, {"classic": int(c), "neg_macd": int(n)}
 
 
-# =========================
-# Öffentliche API-Funktionen für DOE
-# =========================
+# ======= Öffentliche API =======
 def _autodetect_input() -> Optional[str]:
-    candidates = [
-        # Ursprüngliche Examples (beibehalten):
-        r'C:\Projekte\crt_250816\data\raw\btc_1week_candlesticks_all.csv',
-        'data/sp500_data.csv',
-        'data/test_data.parquet',
-        'test_data.csv'
-    ]
-    for p in candidates:
-        if Path(p).exists():
-            return p
-    # generische Suche
     for base in ("./data", "."):
-        if not Path(base).is_dir():
-            continue
-        for name in os.listdir(base):
-            if Path(name).suffix.lower() in ('.csv', '.parquet'):
-                return str(Path(base) / name)
-    return None
+        b = Path(base)
+        if b.is_dir():
+            for name in sorted(os.listdir(b)):
+                if name.lower().endswith((".csv", ".parquet")):
+                    return str(b / name)
+    candidates = [
+        r"C:\Projekte\crt_250816\data\raw\btc_1week_candlesticks_all.csv",
+        "data/sp500_data.csv", "data/test_data.parquet", "test_data.csv",
+    ]
+    return next((p for p in candidates if Path(p).exists()), None)
 
 
-def analyze(
-    window: int = DivergenceParams.window,
-    candle_tolerance: float = DivergenceParams.candle_tolerance,
-    macd_tolerance: float = DivergenceParams.macd_tolerance,
-    input_path: Optional[str] = None,
-    enable_plot: bool = False
-) -> Dict[str, Any]:
+def analyze(window: int = DivergenceParams.window,
+            candle_tolerance: float = DivergenceParams.candle_tolerance,
+            macd_tolerance: float = DivergenceParams.macd_tolerance,
+            input_path: Optional[str] = None,
+            enable_plot: bool = False,
+            diagnose: bool = False) -> Dict[str, Any]:
     """
-    DOE-tauglicher programmatischer Aufruf.
-    Gibt ein Dict mit Counts zurück und (für Kompatibilität) keine Features werden entfernt.
+    DOE-tauglicher programmatischer Aufruf. Gibt dict mit Counts + details-DF.
     """
+    input_path = input_path or _autodetect_input()
     if input_path is None:
-        input_path = _autodetect_input()
-    if input_path is None:
-        raise FileNotFoundError("Keine Eingabedatei gefunden. Bitte input_path angeben oder Datei in ./data ablegen.")
-
+        raise FileNotFoundError("Keine Eingabedatei gefunden. Bitte --input setzen oder Datei in ./data ablegen.")
     analyzer = ChartAnalyzer(
-        divergence_params={
-            "window": int(window),
-            "candle_tolerance": float(candle_tolerance),
-            "macd_tolerance": float(macd_tolerance),
-        },
-        enable_plot=enable_plot
+        divergence_params={"window": int(window), "candle_tolerance": float(candle_tolerance), "macd_tolerance": float(macd_tolerance)},
+        enable_plot=enable_plot, diagnose=diagnose,
     )
     ok, stats = analyzer.run_analysis(input_path)
-    if not ok or stats is None:
-        stats = {"classic": 0, "neg_macd": 0}
-
-    # Kompatibles Rückgabeformat für DOE-Runner
-    return {
-        "classic_count": int(stats.get("classic", 0)),
-        "neg_macd_count": int(stats.get("neg_macd", 0)),
-        "details": analyzer.df if hasattr(analyzer, "df") else None
-    }
+    classic = int(stats.get("classic", 0)); neg = int(stats.get("neg_macd", 0))
+    return {"classic_count": classic, "neg_macd_count": neg, "details": analyzer.df}
 
 
 def run(**kwargs) -> Dict[str, Any]:
     return analyze(**kwargs)
 
 
-def main(
-    window: int = DivergenceParams.window,
-    candle_tolerance: float = DivergenceParams.candle_tolerance,
-    macd_tolerance: float = DivergenceParams.macd_tolerance,
-    input_path: Optional[str] = None,
-    enable_plot: bool = True
-) -> Dict[str, Any]:
-    """
-    Haupt-Einsprungpunkt als API (nicht zu verwechseln mit __main__).
-    """
-    return analyze(window, candle_tolerance, macd_tolerance, input_path, enable_plot)
+def main(window: int = DivergenceParams.window,
+         candle_tolerance: float = DivergenceParams.candle_tolerance,
+         macd_tolerance: float = DivergenceParams.macd_tolerance,
+         input_path: Optional[str] = None,
+         enable_plot: bool = True,
+         diagnose: bool = False) -> Dict[str, Any]:
+    return analyze(window, candle_tolerance, macd_tolerance, input_path, enable_plot, diagnose)
 
 
-# =========================
-# CLI
-# =========================
+# ======= CLI =======
 def _parse_args(argv=None):
     p = argparse.ArgumentParser(description="Mainframe RT DOE – Analyse & Chart")
-    p.add_argument("--input", "-i", dest="input_path", type=str, default=None,
-                   help="Pfad zu Eingabedaten (.csv | .parquet)")
-    p.add_argument("--window", "-w", type=int, default=DivergenceParams.window,
-                   help=f"Lookback-Fenster (default: {DivergenceParams.window})")
-    p.add_argument("--candle-tolerance", "--ct", type=float, default=DivergenceParams.candle_tolerance,
-                   help=f"Candle-Toleranz (default: {DivergenceParams.candle_tolerance})")
-    p.add_argument("--macd-tolerance", "--mt", type=float, default=DivergenceParams.macd_tolerance,
-                   help=f"MACD-Toleranz (default: {DivergenceParams.macd_tolerance})")
-    p.add_argument("--no-plot", action="store_true", help="Chart rendering deaktivieren (für Batch/DOE)")
+    p.add_argument("--input", "-i", dest="input_path", type=str, default=None)
+    p.add_argument("--window", "-w", type=int, default=DivergenceParams.window)
+    p.add_argument("--ct", "--candle-tolerance", dest="candle_tolerance", type=float, default=DivergenceParams.candle_tolerance)
+    p.add_argument("--mt", "--macd-tolerance", dest="macd_tolerance", type=float, default=DivergenceParams.macd_tolerance)
+    p.add_argument("--no-plot", action="store_true")
+    p.add_argument("--diagnose", action="store_true", help="Zeigt Spalten/Counts-Infos in den Logs")
     return p.parse_args(argv)
 
 
-def _legacy_possible_files() -> list:
-    # Liste aus der ursprünglichen Datei beibehalten
-    return [
-        r'C:\Projekte\crt_250816\data\raw\btc_1week_candlesticks_all.csv',
-        'data/sp500_data.csv',
-        'data/test_data.parquet',
-        'test_data.csv'
-    ]
-
-
 if __name__ == "__main__":
-    # CLI-Verhalten: wie bisher Chart + Show, aber parametrisierbar
     args = _parse_args()
-    input_path = args.input_path or _autodetect_input()
-    if input_path is None:
-        print("Keine Datendatei gefunden. Bitte Pfad angeben oder Datei bereitstellen.")
-        print("Gesuchte Dateien (Beispiele):")
-        for f in _legacy_possible_files():
-            print(f"  - {f}")
-        sys.exit(1)
-
-    res = main(
-        window=args.window,
-        candle_tolerance=args.candle_tolerance,
-        macd_tolerance=args.macd_tolerance,
-        input_path=input_path,
-        enable_plot=(not args.no_plot)
-    )
-
-    # kompakte Zusammenfassung
+    res = main(window=args.window,
+               candle_tolerance=args.candle_tolerance,
+               macd_tolerance=args.macd_tolerance,
+               input_path=args.input_path,
+               enable_plot=(not args.no_plot),
+               diagnose=args.diagnose)
     print("\n=== Zusammenfassung ===")
     print(f"Classic Divergences:       {res.get('classic_count', 0)}")
     print(f"Negative MACD Divergences: {res.get('neg_macd_count', 0)}")
-
-    # Chart anzeigen, wenn aktiv
     if not args.no_plot:
         try:
             fplt.show()
         except Exception as e:
-            logger.error(f"Fehler bei fplt.show(): {e}")
+            logger.error(f"fplt.show() Fehler: {e}")

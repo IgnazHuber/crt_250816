@@ -1,7 +1,6 @@
 """
 Simple Workflow - Vereinfachter Workflow ohne komplexe Module
 Funktioniert garantiert und bietet die wichtigsten Analysen
-✅ KORRIGIERT: Richtige Imports für umbenannte Module
 """
 
 import pandas as pd
@@ -11,10 +10,10 @@ from datetime import datetime
 from pathlib import Path
 import time
 
-# Nur die funktionierenden Module importieren - KORRIGIERTE IMPORTS
+# Nur die funktionierenden Module importieren
 try:
     from quick_enhanced_test import main as run_quick_test
-    from enhanced_runner import run_enhanced_analysis  # ← GEÄNDERT von simple_enhanced_runner
+    from simple_enhanced_runner import run_enhanced_analysis
     print("✅ Alle Module erfolgreich importiert")
 except ImportError as e:
     print(f"❌ Import-Fehler: {e}")

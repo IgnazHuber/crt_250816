@@ -1,19 +1,14 @@
-# Ersetze dein ORIGINALES quick_enhanced_test.py mit diesem Code:
-
 """
 Quick Enhanced Test - Funktioniert garantiert mit den bestehenden Modulen
 Erweitert das funktionierende interactive_simple.py um neue Divergenzen
-✅ KORRIGIERT: Excel Export + Outputs Ordner
 """
 
 import pandas as pd
 import numpy as np
 import logging
 from datetime import datetime
-from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog
-import os
 
 # Bestehende Module (die funktionieren)
 from Initialize_RSI_EMA_MACD import Initialize_RSI_EMA_MACD
@@ -22,69 +17,8 @@ from CBullDivg_Analysis_vectorized import CBullDivg_analysis
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-# Output-Ordner konfigurieren
-PROJECT_DIR = Path(__file__).parent.parent.parent  # Gehe 3 Ebenen hoch zu crt_250816
-OUTPUTS_DIR = PROJECT_DIR / "outputs" / "quick_analysis"
-OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
-
-print(f"📁 Quick Test Output-Verzeichnis: {OUTPUTS_DIR}")
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-def fix_datetime_columns_for_excel(df):
-    """
-    Aggressiver Fix für alle datetime-Spalten für Excel-Export
-    """
-    df_copy = df.copy()
-    fixed_count = 0
-    
-    # Methode 1: Alle Spalten durchgehen
-    for col in df_copy.columns:
-        try:
-            if (str(df_copy[col].dtype).startswith('datetime64') or 
-                'date' in col.lower() or 'time' in col.lower()):
-                df_copy[col] = pd.to_datetime(df_copy[col], errors='coerce').dt.tz_localize(None)
-                fixed_count += 1
-        except:
-            try:
-                if 'date' in col.lower():
-                    df_copy[col] = df_copy[col].astype(str)
-                    fixed_count += 1
-            except:
-                pass
-    
-    # Methode 2: Spezifische Problemspalten
-    datetime_cols = [
-        'date', 'CBullD_Lower_Low_date_gen', 'CBullD_Higher_Low_date_gen',
-        'CBullD_Lower_Low_date_neg_MACD', 'CBullD_Higher_Low_date_neg_MACD'
-    ]
-    
-    for col in datetime_cols:
-        if col in df_copy.columns:
-            try:
-                df_copy[col] = pd.to_datetime(df_copy[col], errors='coerce').dt.tz_localize(None)
-            except:
-                try:
-                    df_copy[col] = df_copy[col].astype(str)
-                except:
-                    pass
-    
-    # Methode 3: Object-Spalten prüfen
-    for col in df_copy.select_dtypes(include=['object']).columns:
-        if len(df_copy) > 0:
-            try:
-                sample = df_copy[col].dropna().iloc[0] if not df_copy[col].dropna().empty else None
-                if sample and hasattr(sample, 'tzinfo'):
-                    df_copy[col] = pd.to_datetime(df_copy[col], errors='coerce').dt.tz_localize(None)
-                    fixed_count += 1
-            except:
-                pass
-    
-    if fixed_count > 0:
-        logger.info(f"🔧 {fixed_count} datetime-Spalten für Excel repariert")
-    
-    return df_copy
 
 def add_simple_hidden_bullish(df):
     """
@@ -199,7 +133,7 @@ def create_enhanced_chart(df, hidden_signals, bearish_signals):
     """
     Erstellt Chart mit allen Divergenz-Typen
     """
-    # 3-Panel Chart
+    # 3-Panel Chart wie vorher
     fig = make_subplots(
         rows=3, cols=1,
         shared_xaxes=True,
@@ -256,7 +190,7 @@ def create_enhanced_chart(df, hidden_signals, bearish_signals):
         )
         fig.add_hline(y=0, line_color="gray", opacity=0.5, row=3, col=1)
     
-    # CLASSIC BULLISH DIVERGENZEN
+    # CLASSIC BULLISH DIVERGENZEN (wie vorher)
     if 'CBullD_gen' in df.columns:
         divergence_data = df[df['CBullD_gen'] == 1]
         for div_num, (idx, row) in enumerate(divergence_data.iterrows(), 1):
@@ -265,7 +199,7 @@ def create_enhanced_chart(df, hidden_signals, bearish_signals):
                     lower_date = pd.to_datetime(row['CBullD_Lower_Low_date_gen'])
                     higher_date = pd.to_datetime(row['CBullD_Higher_Low_date_gen'])
                     
-                    # Rote und blaue X
+                    # Rote und blaue X wie vorher
                     fig.add_trace(
                         go.Scatter(
                             x=[lower_date], y=[row['CBullD_Lower_Low_gen']],
@@ -294,7 +228,7 @@ def create_enhanced_chart(df, hidden_signals, bearish_signals):
             except:
                 continue
     
-    # HIDDEN BULLISH DIVERGENZEN (orange Kreise)
+    # HIDDEN BULLISH DIVERGENZEN (neue Kreise)
     for i, signal in enumerate(hidden_signals, 1):
         fig.add_trace(
             go.Scatter(
@@ -309,7 +243,7 @@ def create_enhanced_chart(df, hidden_signals, bearish_signals):
             row=1, col=1
         )
     
-    # BEARISH DIVERGENZEN (rote Dreiecke)
+    # BEARISH DIVERGENZEN (neue Dreiecke)
     for i, signal in enumerate(bearish_signals, 1):
         fig.add_trace(
             go.Scatter(
@@ -398,47 +332,32 @@ def main():
     fig = create_enhanced_chart(df, hidden_signals, bearish_signals)
     fig.show()
     
-    # KUGELSICHERER Excel Export im OUTPUTS-Ordner
+    # Excel Export
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    excel_file = f"quick_enhanced_analysis_{timestamp}.xlsx"
+    
     try:
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        excel_file = OUTPUTS_DIR / f"quick_enhanced_analysis_{timestamp}.xlsx"
-        
-        logger.info(f"📋 Exportiere nach: {excel_file}")
-        
-        # DataFrame für Excel vorbereiten
-        df_for_excel = fix_datetime_columns_for_excel(df)
-        
+        # Datetime-Spalten für Excel vorbereiten
+        df_copy = df.copy()
+        df_copy['date'] = pd.to_datetime(df_copy['date']).dt.tz_localize(None)
+    
         with pd.ExcelWriter(excel_file, engine='openpyxl') as writer:
-            df_for_excel.to_excel(writer, sheet_name='Data', index=False)
-            
-            # Zusammenfassung
-            summary = pd.DataFrame([
-                ['Classic Bullish', classic_count],
-                ['Negative MACD', neg_macd_count],
-                ['Hidden Bullish', len(hidden_signals)],
-                ['Classic Bearish', len(bearish_signals)],
-                ['TOTAL', classic_count + neg_macd_count + len(hidden_signals) + len(bearish_signals)]
-            ], columns=['Divergence Type', 'Count'])
-            summary.to_excel(writer, sheet_name='Summary', index=False)
-            
-            # Hidden Signals Details (mit datetime-fix)
-            if hidden_signals:
-                hidden_df = pd.DataFrame(hidden_signals)
-                hidden_df['date'] = pd.to_datetime(hidden_df['date']).dt.tz_localize(None)
-                hidden_df.to_excel(writer, sheet_name='Hidden_Signals', index=False)
-            
-            # Bearish Signals Details (mit datetime-fix)
-            if bearish_signals:
-                bearish_df = pd.DataFrame(bearish_signals)
-                bearish_df['date'] = pd.to_datetime(bearish_df['date']).dt.tz_localize(None)
-                bearish_df.to_excel(writer, sheet_name='Bearish_Signals', index=False)
-        
-        logger.info(f"✅ Excel erfolgreich exportiert: {excel_file}")
-        
+            df_copy.to_excel(writer, sheet_name='Data', index=False)
     except Exception as e:
         logger.error(f"❌ Excel Export fehlgeschlagen: {e}")
-        logger.info("📊 Aber Chart und Analyse waren erfolgreich!")
+        logger.info("🔄 Versuche ohne Excel Export fortzufahren...")
+        
+        # Zusammenfassung
+        summary = pd.DataFrame([
+            ['Classic Bullish', classic_count],
+            ['Negative MACD', neg_macd_count],
+            ['Hidden Bullish', len(hidden_signals)],
+            ['Classic Bearish', len(bearish_signals)],
+            ['TOTAL', classic_count + neg_macd_count + len(hidden_signals) + len(bearish_signals)]
+        ], columns=['Divergence Type', 'Count'])
+        summary.to_excel(writer, sheet_name='Summary', index=False)
     
+    logger.info(f"📋 Excel exportiert: {excel_file}")
     logger.info("✅ Erweiterte Analyse abgeschlossen!")
 
 if __name__ == "__main__":

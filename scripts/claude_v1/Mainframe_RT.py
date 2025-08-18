@@ -42,6 +42,9 @@ class ChartAnalyzer:
         # Standard-Konfiguration
         self.config = config or {
             'divergence': {
+                #'window': 5,
+                #'candle_tolerance': 0.1,
+                #'macd_tolerance': 3.25
                 'window': 5,
                 'candle_tolerance': 0.1,
                 'macd_tolerance': 3.25
@@ -342,7 +345,8 @@ def main():
     try:
         # Konfigurierbare Datenpfade (nicht mehr hardcoded)
         possible_data_files = [
-            r'C:\Projekte\crt_250816\data\raw\btc_1day_candlesticks_all.csv',  # Original
+            #r'C:\Projekte\crt_250816\data\raw\btc_1day_candlesticks_all.csv',  # Original
+            r'C:\Projekte\crt_250816\data\raw\btc_1week_candlesticks_all.csv',  # Original
             'data/sp500_data.csv',  # Relative Pfade
             'data/test_data.parquet',
             'test_data.csv'

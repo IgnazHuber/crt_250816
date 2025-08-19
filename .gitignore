@@ -6,6 +6,9 @@ dist/
 build/
 .eggs/
 
+# Git
+.git
+
 # Virtual Environment
 .venv/
 env/

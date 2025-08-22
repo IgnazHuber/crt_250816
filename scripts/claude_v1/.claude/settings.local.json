@@ -3,7 +3,8 @@
     "allow": [
       "Bash(copy server.py server_backup.py)",
       "Bash(copy staticapp.js staticapp_backup.js)",
-      "Bash(copy staticindex.html staticindex_backup.html)"
+      "Bash(copy staticindex.html staticindex_backup.html)",
+      "Bash(python -m uvicorn:*)"
     ],
     "deny": [],
     "ask": []

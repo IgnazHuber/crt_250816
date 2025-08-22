@@ -7,6 +7,10 @@
       "Bash(python -m uvicorn:*)"
     ],
     "deny": [],
-    "ask": []
+    "ask": [],
+    "additionalDirectories": [
+      "C:\\Projekte\\crt_250816\\scripts",
+      "C:\\c\\Projekte\\crt_250816\\scripts"
+    ]
   }
 }

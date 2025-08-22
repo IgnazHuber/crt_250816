@@ -1,0 +1,23 @@
+{
+  "results": {},
+  "variants": [
+    {
+      "id": 0,
+      "name": "Standard",
+      "window": 5,
+      "candleTol": 0.1,
+      "macdTol": 3.25,
+      "color": "#FF0000",
+      "visible": true
+    },
+    {
+      "id": 1,
+      "name": "Aggressiv",
+      "window": 3,
+      "candleTol": 0.2,
+      "macdTol": 5,
+      "color": "#0080FF",
+      "visible": true
+    }
+  ]
+}

@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bullish Divergence Parameter Analyzer v03</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.27.0/plotly.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1e3c72, #2a5298);
+            min-height: 100vh;
+            color: #fff;
+        }
+        
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 2.5em;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        .control-panel {
+            background: rgba(255,255,255,0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+        }
+        
+        .file-input-container {
+            margin-bottom: 20px;
+        }
+        
+        .file-input-label {
+            display: inline-block;
+            padding: 12px 24px;
+            background: linear-gradient(45deg, #4CAF50, #45a049);
+            color: white;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: bold;
+            box-shadow: 0 4px 15px rgba(76,175,80,0.3);
+        }
+        
+        .file-input-label:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(76,175,80,0.4);
+        }
+        
+        input[type="file"] {
+            display: none;
+        }
+        
+        .file-name {
+            margin-left: 15px;
+            font-size: 14px;
+            color: #a0d0ff;
+        }
+        
+        .parameters-section {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        
+        .parameter-group {
+            background: rgba(255,255,255,0.05);
+            padding: 15px;
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        
+        .parameter-group h3 {
+            margin-bottom: 10px;
+            color: #a0d0ff;
+            font-size: 1.1em;
+        }
+        
+        .parameter-input {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        
+        .parameter-input label {
+            font-size: 0.9em;
+            color: #ddd;
+        }
+        
+        .parameter-input input {
+            width: 80px;
+            padding: 5px;
+            border: 1px solid rgba(255,255,255,0.2);
+            background: rgba(255,255,255,0.1);
+            color: white;
+            border-radius: 5px;
+            text-align: center;
+        }
+        
+        .add-variant-btn {
+            padding: 10px 20px;
+            background: linear-gradient(45deg, #FF6B6B, #FF8E53);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.3s;
+            margin-right: 10px;
+        }
+        
+        .add-variant-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(255,107,107,0.4);
+        }
+        
+        .analyze-btn {
+            padding: 12px 30px;
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 1.1em;
+            transition: all 0.3s;
+        }
+        
+        .analyze-btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102,126,234,0.4);
+        }
+        
+        .analyze-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .variants-list {
+            background: rgba(255,255,255,0.05);
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 20px;
+        }
+        
+        .variant-item {
+            background: rgba(255,255,255,0.1);
+            padding: 10px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-left: 4px solid;
+        }
+        
+        .variant-toggle {
+            margin-right: 10px;
+        }
+        
+        .remove-variant {
+            padding: 5px 10px;
+            background: #ff4444;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 0.9em;
+        }
+        
+        .chart-container {
+            background: rgba(255,255,255,0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+        }
+        
+        .stats-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+        
+        .stats-card {
+            background: rgba(255,255,255,0.1);
+            padding: 20px;
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 20px;
+            font-size: 1.2em;
+            color: #a0d0ff;
+        }
+        
+        .error {
+            background: rgba(255,0,0,0.1);
+            border: 1px solid rgba(255,0,0,0.3);
+            padding: 15px;
+            border-radius: 8px;
+            color: #ff6b6b;
+            margin-top: 10px;
+        }
+        
+        .success {
+            background: rgba(0,255,0,0.1);
+            border: 1px solid rgba(0,255,0,0.3);
+            padding: 15px;
+            border-radius: 8px;
+            color: #6bff6b;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📊 Bullish Divergence Parameter Analyzer v03</h1>
+        
+        <div class="control-panel">
+            <div class="file-input-container">
+                <label for="fileInput" class="file-input-label">
+                    📁 Datei auswählen (CSV/Parquet)
+                </label>
+                <input type="file" id="fileInput" accept=".csv,.parquet">
+                <span class="file-name" id="fileName">Keine Datei ausgewählt</span>
+            </div>
+            
+            <div class="parameters-section">
+                <div class="parameter-group">
+                    <h3>Window Parameter</h3>
+                    <div class="parameter-input">
+                        <label>Window Size:</label>
+                        <input type="number" id="window" value="5" min="1" max="20">
+                    </div>
+                </div>
+                
+                <div class="parameter-group">
+                    <h3>Toleranzen</h3>
+                    <div class="parameter-input">
+                        <label>Candle Tol (%):</label>
+                        <input type="number" id="candleTol" value="0.1" step="0.01" min="0">
+                    </div>
+                    <div class="parameter-input">
+                        <label>MACD Tol (%):</label>
+                        <input type="number" id="macdTol" value="3.25" step="0.01" min="0">
+                    </div>
+                </div>
+                
+                <div class="parameter-group">
+                    <h3>Variantenname</h3>
+                    <div class="parameter-input">
+                        <input type="text" id="variantName" placeholder="z.B. Standard" style="width: 100%;">
+                    </div>
+                </div>
+            </div>
+            
+            <div style="margin-top: 20px;">
+                <button class="add-variant-btn" onclick="analyzerModules.ui.addVariant()">➕ Variante hinzufügen</button>
+                <button class="analyze-btn" onclick="analyzerModules.controller.startAnalysis()" id="analyzeBtn">🚀 Analyse starten</button>
+            </div>
+            
+            <div class="variants-list" id="variantsList">
+                <h3>Parametervarianten:</h3>
+                <div id="variantsContainer"></div>
+            </div>
+        </div>
+        
+        <div id="chartContainer" style="display: none;">
+            <div class="chart-container">
+                <div id="mainChart" style="height: 800px;"></div>
+            </div>
+            
+            <div class="stats-container" id="statsContainer"></div>
+        </div>
+        
+        <div id="messageContainer"></div>
+    </div>
+
+    <!-- Modulare JavaScript-Struktur -->
+    <script src="js/data-loader.js"></script>
+    <script src="js/indicator-calculator.js"></script>
+    <script src="js/divergence-analyzer.js"></script>
+    <script src="js/chart-renderer.js"></script>
+    <script src="js/ui-controller.js"></script>
+    
+    <script>
+        // Globaler Namespace für Module
+        window.analyzerModules = {
+            data: null,
+            indicators: null,
+            divergence: null,
+            chart: null,
+            ui: null,
+            controller: null
+        };
+
+        // Initialisierung nach Laden aller Module
+        document.addEventListener('DOMContentLoaded', function() {
+            // Module initialisieren
+            analyzerModules.data = new DataLoader();
+            analyzerModules.indicators = new IndicatorCalculator();
+            analyzerModules.divergence = new DivergenceAnalyzer();
+            analyzerModules.chart = new ChartRenderer();
+            analyzerModules.ui = new UIController();
+            analyzerModules.controller = new AnalysisController();
+            
+            // Standard-Varianten hinzufügen
+            analyzerModules.ui.addDefaultVariants();
+            
+            console.log('Bullish Divergence Analyzer v03 bereit.');
+        });
+    </script>
+</body>
+</html>

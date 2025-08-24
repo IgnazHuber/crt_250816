@@ -1,0 +1,95 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bullish Divergence Analyzer</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Bullish Divergence Analyzer</h1>
+        </div>
+        
+        <div class="controls">
+            <div class="file-upload">
+                <label for="fileInput">Datei:</label>
+                <input type="file" id="fileInput" accept=".csv,.parquet">
+                <span id="fileName"></span>
+                <button id="clearData" class="btn btn-danger" style="display: none;">Clear</button>
+                <div id="uploadMsg"></div>
+            </div>
+            
+            <div class="variant-controls">
+                <label for="variantName">Variante:</label>
+                <input type="text" id="variantName" placeholder="e.g. Basis">
+                <label for="window">Window:</label>
+                <input type="number" id="window" min="1" step="1" value="5">
+                <label for="candleTol">Candle Tol (%):</label>
+                <input type="number" id="candleTol" min="0" step="0.01" value="0.1">
+                <label for="macdTol">MACD Tol (%):</label>
+                <input type="number" id="macdTol" min="0" step="0.01" value="3.25">
+                <button class="btn" onclick="addVariant()">Hinzufügen</button>
+                <button class="btn" onclick="loadPreset('standard')">Standard</button>
+                <div id="variants"></div>
+                <div id="messageContainer"></div>
+            </div>
+            
+            <div class="analyze-controls">
+                <button id="analyzeBtn" class="btn" disabled>Analyze</button>
+            </div>
+        </div>
+        
+        <div class="chart-container">
+            <div id="mainChart"></div>
+        </div>
+        
+        <div id="statsContainer"></div>
+        
+        <div id="serverStatus" class="status-indicator"></div>
+    </div>
+    
+    <script src="/static/app.js"></script>
+</body>
+</html>

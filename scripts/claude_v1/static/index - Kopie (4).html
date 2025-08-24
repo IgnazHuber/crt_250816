@@ -71,7 +71,7 @@
             
             <div class="action-buttons">
                 <button class="btn btn-success" onclick="addVariant()">➕ Variante hinzufügen</button>
-                <button class="btn btn-primary" onclick="analyze()" id="analyzeBtn" disabled>
+                <button class="btn btn-primary" onclick="runAnalysis()" id="analyzeBtn">
                     🚀 Analyse starten
                 </button>
                 <button class="btn btn-secondary" onclick="saveConfig()">💾 Konfig speichern</button>
@@ -81,7 +81,7 @@
             <!-- Variants List -->
             <div class="variants-section">
                 <h4>Parametervarianten:</h4>
-                <div id="variants"></div>
+                <div id="variantsList"></div>
             </div>
         </div>
 
@@ -101,11 +101,24 @@
             <div class="export-buttons">
                 <button onclick="exportResults('json')" class="btn btn-export">📄 JSON Export</button>
                 <button onclick="exportResults('csv')" class="btn btn-export">📊 CSV Export</button>
+                <button onclick="exportValidationXLSX()">📑 XLSX Validierung</button>
                 <button onclick="toggleFullscreen()" class="btn btn-export">🔍 Vollbild</button>
             </div>
             
-            <!-- Chart -->
-            <div id="mainChart"></div>
+            <!-- Chart Container with Info Box -->
+            <div class="chart-container">
+                <div id="mainChart"></div>
+                <!-- Chart Info Box -->
+                <div id="chartInfoBox" class="chart-info-box" style="display: none;">
+                    <div class="info-header">
+                        <span id="infoTitle">Divergenz-Info</span>
+                        <button onclick="closeChartInfo()" class="info-close">✕</button>
+                    </div>
+                    <div id="infoContent" class="info-content">
+                        <!-- Info content wird hier eingefügt -->
+                    </div>
+                </div>
+            </div>
             
             <!-- Statistics -->
             <div id="statsContainer" class="stats-container"></div>

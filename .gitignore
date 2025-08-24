@@ -32,5 +32,5 @@ env.bak/
 *.pdf
 *.xlsx
 *.png
-*.html
+#*.html
 

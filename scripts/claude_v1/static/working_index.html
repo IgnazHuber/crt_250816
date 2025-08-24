@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Working Bullish Divergence Analyzer</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.27.0/plotly.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: 'Segoe UI', sans-serif; 
+            background: #000000;
+            color: white; 
+            padding: 10px;
+            overflow-x: auto;
+        }
+        .container { 
+            max-width: 100vw; 
+            margin: 0 auto;
+            padding: 0 10px;
+        }
+        h1 { 
+            text-align: center; 
+            margin-bottom: 15px; 
+            font-size: 1.8em;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .panel {
+            background: rgba(255,255,255,0.05); 
+            border-radius: 8px; 
+            padding: 10px; 
+            margin-bottom: 10px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        .panel h3 {
+            color: #a0d0ff;
+            margin-bottom: 8px;
+            font-size: 1em;
+        }
+        
+        /* COMPACT UI */
+        .btn {
+            padding: 4px 8px; 
+            border: none; 
+            border-radius: 4px;
+            cursor: pointer; 
+            font-weight: normal; 
+            margin: 2px;
+            font-size: 11px;
+            height: 24px;
+        }
+        .btn-primary { background: linear-gradient(45deg, #667eea, #764ba2); color: white; }
+        .btn-success { background: linear-gradient(45deg, #4CAF50, #45a049); color: white; }
+        .btn-danger { background: #ff4444; color: white; }
+        .btn-secondary { background: linear-gradient(45deg, #666, #888); color: white; }
+        .btn-preset { background: rgba(255,255,255,0.1); color: #a0d0ff; border: 1px solid rgba(160,208,255,0.3); }
+        
+        input[type="file"] { display: none; }
+        .file-label {
+            display: inline-block; 
+            padding: 6px 12px;
+            background: linear-gradient(45deg, #4CAF50, #45a049);
+            color: white; 
+            border-radius: 4px; 
+            cursor: pointer;
+            font-size: 11px;
+            font-weight: bold;
+        }
+        
+        .param-grid {
+            display: grid; 
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 8px; 
+            margin: 8px 0;
+        }
+        .param-group {
+            background: rgba(255,255,255,0.05); 
+            padding: 8px;
+            border-radius: 6px;
+        }
+        .param-group h4 {
+            margin-bottom: 6px;
+            color: #a0d0ff;
+            font-size: 0.9em;
+        }
+        .param-group label { 
+            display: block; 
+            margin-bottom: 3px; 
+            font-size: 0.8em; 
+            color: #ddd;
+        }
+        .param-group input {
+            width: 70px; 
+            padding: 2px 4px; 
+            border: 1px solid rgba(255,255,255,0.2);
+            background: rgba(255,255,255,0.1); 
+            color: white; 
+            border-radius: 3px;
+            text-align: center;
+            font-size: 11px;
+            height: 20px;
+        }
+        
+        .action-buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin: 5px 0;
+        }
+        
+        .status-bar {
+            background: rgba(255,255,255,0.05);
+            padding: 5px;
+            border-radius: 4px;
+            margin-bottom: 10px;
+            font-size: 0.9em;
+        }
+        .status-online { color: #00ff00; }
+        .status-offline { color: #ff0000; }
+        
+        .variant-item {
+            background: rgba(255,255,255,0.1); 
+            padding: 6px;
+            border-radius: 4px; 
+            margin: 3px 0;
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center;
+            border-left: 3px solid;
+            font-size: 0.9em;
+        }
+        
+        /* CHART - FORCED TO FIT */
+        #mainChart { 
+            height: 600px; 
+            width: calc(100vw - 40px);
+            max-width: calc(100vw - 40px);
+            background: rgba(0,0,0,0.8); 
+            border-radius: 8px; 
+            border: 1px solid rgba(255,255,255,0.1);
+            margin: 10px 0;
+            overflow: hidden;
+        }
+        
+        .message { 
+            padding: 8px; 
+            border-radius: 4px; 
+            margin: 5px 0;
+            font-size: 0.9em;
+        }
+        .success { background: rgba(0,255,0,0.1); border: 1px solid rgba(0,255,0,0.3); color: #6bff6b; }
+        .error { background: rgba(255,0,0,0.1); border: 1px solid rgba(255,0,0,0.3); color: #ff6b6b; }
+        .loading { background: rgba(33,150,243,0.1); border: 1px solid rgba(33,150,243,0.3); color: #a0d0ff; }
+        
+        .stats-card {
+            background: rgba(255,255,255,0.05); 
+            padding: 10px;
+            border-radius: 6px;
+            font-size: 0.9em;
+        }
+        .stats-card h3 {
+            color: #a0d0ff;
+            margin-bottom: 8px;
+        }
+        
+        /* RESPONSIVE */
+        @media (max-width: 768px) {
+            .param-grid { grid-template-columns: 1fr; }
+            .action-buttons { flex-direction: column; }
+            #mainChart { 
+                height: 500px;
+                width: calc(100vw - 20px);
+                max-width: calc(100vw - 20px);
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📈 Working Bullish Divergence Analyzer</h1>
+        </header>
+
+        <!-- Status -->
+        <div class="status-bar">
+            <div id="serverStatus">⚡ Checking connection...</div>
+        </div>
+
+        <!-- Messages -->
+        <div id="messageContainer"></div>
+
+        <!-- File Upload -->
+        <div class="panel">
+            <h3>📁 Load Data</h3>
+            <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                <label class="file-label">
+                    📂 Select OHLC CSV/Parquet
+                    <input type="file" id="fileInput" accept=".csv,.parquet" />
+                </label>
+                <span id="fileName" style="color: #a0d0ff; font-size: 0.9em;"></span>
+                <button id="clearData" class="btn btn-danger" style="display:none;">🗑️ Clear</button>
+            </div>
+            <div id="uploadMsg"></div>
+        </div>
+
+        <!-- Parameters -->
+        <div class="panel">
+            <h3>⚙️ Parameters</h3>
+            
+            <div class="param-grid">
+                <div class="param-group">
+                    <h4>Window</h4>
+                    <label>Size:</label>
+                    <input type="number" id="window" value="5" />
+                </div>
+                <div class="param-group">
+                    <h4>Tolerances</h4>
+                    <label>Candle %:</label>
+                    <input type="number" id="candleTol" step="0.01" value="0.1" />
+                    <label>MACD %:</label>
+                    <input type="number" id="macdTol" step="0.01" value="3.25" />
+                </div>
+                <div class="param-group">
+                    <h4>Name</h4>
+                    <input type="text" id="variantName" value="Standard" />
+                </div>
+            </div>
+
+            <div class="action-buttons">
+                <button class="btn btn-success" onclick="addVariant()">➕ Add</button>
+                <button id="analyzeBtn" class="btn btn-primary" onclick="startAnalysis()" disabled>🚀 Analyze</button>
+                <span style="color: #a0d0ff; font-size: 0.8em; margin-left: 10px;">Presets:</span>
+                <button class="btn btn-preset" onclick="loadPreset('standard')">Standard</button>
+                <button class="btn btn-preset" onclick="loadPreset('conservative')">Conservative</button>
+                <button class="btn btn-preset" onclick="loadPreset('aggressive')">Aggressive</button>
+            </div>
+
+            <div id="variantsList">
+                <h4>Variants:</h4>
+            </div>
+        </div>
+
+        <!-- Results -->
+        <div id="resultsPanel" class="panel" style="display:none;">
+            <h3>📊 Analysis Results</h3>
+            <div id="statsContainer"></div>
+            <div id="mainChart"></div>
+        </div>
+    </div>
+
+    <script src="/static/working_app.js"></script>
+</body>
+</html>

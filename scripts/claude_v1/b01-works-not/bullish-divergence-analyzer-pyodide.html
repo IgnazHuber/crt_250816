@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bullish Divergence Parameter Analyzer - Python Edition</title>
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.27.0/plotly.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1e3c72, #2a5298);
+            min-height: 100vh;
+            color: #fff;
+        }
+        
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 2.5em;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        .control-panel {
+            background: rgba(255,255,255,0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+        }
+        
+        .file-input-container {
+            margin-bottom: 20px;
+        }
+        
+        .file-input-label {
+            display: inline-block;
+            padding: 12px 24px;
+            background: linear-gradient(45deg, #4CAF50, #45a049);
+            color: white;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: bold;
+            box-shadow: 0 4px 15px rgba(76,175,80,0.3);
+        }
+        
+        .file-input-label:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(76,175,80,0.4);
+        }
+        
+        input[type="file"] {
+            display: none;
+        }
+        
+        .file-name {
+            margin-left: 15px;
+            font-size: 14px;
+            color: #a0d0ff;
+        }
+        
+        .parameters-section {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        
+        .parameter-group {
+            background: rgba(255,255,255,0.05);
+            padding: 15px;
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        
+        .parameter-group h3 {
+            margin-bottom: 10px;
+            color: #a0d0ff;
+            font-size: 1.1em;
+        }
+        
+        .parameter-input {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        
+        .parameter-input label {
+            font-size: 0.9em;
+            color: #ddd;
+        }
+        
+        .parameter-input input {
+            width: 80px;
+            padding: 5px;
+            border: 1px solid rgba(255,255,255,0.2);
+            background: rgba(255,255,255,0.1);
+            color: white;
+            border-radius: 5px;
+            text-align: center;
+        }
+        
+        .add-variant-btn {
+            padding: 10px 20px;
+            background: linear-gradient(45deg, #FF6B6B, #FF8E53);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.3s;
+            margin-right: 10px;
+        }
+        
+        .add-variant-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(255,107,107,0.4);
+        }
+        
+        .analyze-btn {
+            padding: 12px 30px;
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 1.1em;
+            transition: all 0.3s;
+        }
+        
+        .analyze-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102,126,234,0.4);
+        }
+        
+        .analyze-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .variants-list {
+            background: rgba(255,255,255,0.05);
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 20px;
+        }
+        
+        .variant-item {
+            background: rgba(255,255,255,0.1);
+            padding: 10px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-left: 4px solid;
+        }
+        
+        .variant-toggle {
+            margin-right: 10px;
+        }
+        
+        .remove-variant {
+            padding: 5px 10px;
+            background: #ff4444;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 0.9em;
+        }
+        
+        .chart-container {
+            background: rgba(255,255,255,0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+        }
+        
+        .stats-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+        
+        .stats-card {
+            background: rgba(255,255,255,0.1);
+            padding: 20px;
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+        
+        .stats-card h3 {
+            color: #a0d0ff;
+            margin-bottom: 15px;
+            font-size: 1.2em;
+        }
+        
+        .stat-item {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            padding: 5px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        
+        .stat-label {
+            color: #ddd;
+            font-size: 0.9em;
+        }
+        
+        .stat-value {
+            font-weight: bold;
+            color: #fff;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 20px;
+            font-size: 1.2em;
+            color: #a0d0ff;
+        }
+        
+        .error {
+            background: rgba(255,0,0,0.1);
+            border: 1px solid rgba(255,0,0,0.3);
+            padding: 15px;
+            border-radius: 8px;
+            color: #ff6b6b;
+            margin-top: 10px;
+        }
+        
+        .success {
+            background: rgba(0,255,0,0.1);
+            border: 1px solid rgba(0,255,0,0.3);
+            padding: 15px;
+            border-radius: 8px;
+            color: #6bff6b;
+            margin-top: 10px;
+        }
+        
+        .info {
+            background: rgba(0,150,255,0.1);
+            border: 1px solid rgba(0,150,255,0.3);
+            padding: 15px;
+            border-radius: 8px;
+            color: #6bb6ff;
+            margin-top: 10px;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 30px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 15px;
+            overflow: hidden;
+            margin: 20px 0;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #4CAF50, #45a049);
+            transition: width 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 Bullish Divergence Parameter Analyzer - Python Edition</h1>
+        
+        <div class="control-panel">
+            <div class="file-input-container">
+                <label for="fileInput" class="file-input-label">
+                    📁 CSV/Parquet Datei auswählen
+                </label>
+                <input type="file" id="fileInput" accept=".csv,.parquet">
+                <span class="file-name" id="fileName">Keine Datei ausgewählt</span>
+            </div>
+            
+            <div class="parameters-section">
+                <div class="parameter-group">
+                    <h3>Window Parameter</h3>
+                    <div class="parameter-input">
+                        <label>Window Size:</label>
+                        <input type="number" id="window" value="5" min="1" max="20">
+                    </div>
+                </div>
+                
+                <div class="parameter-group">
+                    <h3>Toleranzen</h3>
+                    <div class="parameter-input">
+                        <label>Candle Tol (%):</label>
+                        <input type="number" id="candleTol" value="0.1" step="0.01" min="0">
+                    </div>
+                    <div class="parameter-input">
+                        <label>MACD Tol (%):</label>
+                        <input type="number" id="macdTol" value="3.25" step="0.01" min="0">
+                    </div>
+                </div>
+                
+                <div class="parameter-group">
+                    <h3>Variantenname</h3>
+                    <div class="parameter-input">
+                        <input type="text" id="variantName" placeholder="z.B. Standard" style="width: 100%;">
+                    </div>
+                </div>
+            </div>
+            
+            <div style="margin-top: 20px;">
+                <button class="add-variant-btn" onclick="addVariant()">➕ Variante hinzufügen</button>
+                <button class="analyze-btn" onclick="analyzeData()" id="analyzeBtn">🚀 Analyse starten</button>
+            </div>
+            
+            <div class="variants-list" id="variantsList">
+                <h3>Parametervarianten:</h3>
+                <div id="variantsContainer"></div>
+            </div>
+            
+            <div class="progress-bar" id="progressBar" style="display: none;">
+                <div class="progress-fill" id="progressFill" style="width: 0%;">0%</div>
+            </div>
+        </div>
+        
+        <div id="chartContainer" style="display: none;">
+            <div class="chart-container">
+                <div id="mainChart" style="height: 600px;"></div>
+            </div>
+            
+            <div class="stats-container" id="statsContainer"></div>
+        </div>
+        
+        <div id="messageContainer"></div>
+    </div>
+
+    <script>
+        // Globale Variablen
+        let pyodide = null;
+        let fileData = null;
+        let variants = [];
+        let variantColors = [
+            '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7',
+            '#DDA0DD', '#98D8C8', '#FFB6C1', '#87CEEB', '#F0E68C'
+        ];
+        let processedData = {};
+        
+        // Progress Update
+        function updateProgress(percent, text) {
+            const progressBar = document.getElementById('progressBar');
+            const progressFill = document.getElementById('progressFill');
+            
+            if (percent > 0) {
+                progressBar.style.display = 'block';
+                progressFill.style.width = percent + '%';
+                progressFill.textContent = text || percent + '%';
+            } else {
+                progressBar.style.display = 'none';
+            }
+        }
+        
+        // Pyodide initialisieren
+        async function initPyodide() {
+            showMessage('Lade Python-Umgebung...', 'info');
+            updateProgress(10, 'Initialisiere Pyodide...');
+            
+            try {
+                pyodide = await loadPyodide({
+                    indexURL: "https://cdn.jsdelivr.net/pyodide/v0.24.1/full/"
+                });
+                
+                updateProgress(30, 'Installiere Pakete...');
+                
+                // Notwendige Pakete installieren
+                await pyodide.loadPackage(['pandas', 'numpy', 'micropip']);
+                
+                updateProgress(50, 'Lade zusätzliche Bibliotheken...');
+                
+                const micropip = pyodide.pyimport("micropip");
+                await micropip.install('pyarrow');  // Für Parquet-Support
+                
+                updateProgress(70, 'Lade Python-Module...');
+                
+                // Python-Module als Strings definieren und laden
+                await loadPythonModules();
+                
+                updateProgress(100, 'Bereit!');
+                showMessage('Python-Umgebung erfolgreich geladen!', 'success');
+                
+                setTimeout(() => updateProgress(0), 1000);
+                
+            } catch (error) {
+                showMessage('Fehler beim Laden der Python-Umgebung: ' + error.message, 'error');
+                updateProgress(0);
+            }
+        }
+        
+        // Python-Module laden
+        async function loadPythonModules() {
+            // Initialize_RSI_EMA_MACD Modul
+            const initializeModule = `
+import pandas as pd
+import numpy as np
+from typing import Optional
+
+RSI_PERIOD = 14
+EMA_SPANS = [12, 20, 26, 50, 100, 200]
+MACD_SIGNAL_PERIOD = 9
+
+def calculate_rsi_vectorized(prices, period=RSI_PERIOD):
+    n = len(prices)
+    prices = prices.astype(np.float64)
+    price_changes = np.diff(prices, prepend=prices[0])
+    gains = np.where(price_changes > 0, price_changes, 0.0)
+    losses = np.where(price_changes < 0, -price_changes, 0.0)
+    
+    avg_gains = np.zeros(n, dtype=np.float64)
+    avg_losses = np.zeros(n, dtype=np.float64)
+    
+    if n <= period:
+        return avg_gains, avg_losses, np.zeros(n), np.zeros(n)
+    
+    # Initial averages
+    avg_gains[period] = np.mean(gains[1:period+1])
+    avg_losses[period] = np.mean(losses[1:period+1])
+    
+    # EMA calculation
+    alpha = 1.0 / period
+    for i in range(period + 1, n):
+        avg_gains[i] = alpha * gains[i] + (1 - alpha) * avg_gains[i-1]
+        avg_losses[i] = alpha * losses[i] + (1 - alpha) * avg_losses[i-1]
+    
+    # Calculate RS and RSI
+    rs_values = np.divide(avg_gains, avg_losses, out=np.zeros_like(avg_gains), where=avg_losses!=0)
+    rsi_values = np.where(avg_losses != 0, 100.0 - (100.0 / (1.0 + rs_values)), 100.0)
+    
+    return avg_gains, avg_losses, rs_values, rsi_values
+
+def Initialize_RSI_EMA_MACD(df):
+    if df.empty or 'close' not in df.columns:
+        return None
+    
+    close_prices = df['close'].values.astype(np.float64)
+    
+    # Calculate RSI
+    avg_gains, avg_losses, rs_values, rsi_values = calculate_rsi_vectorized(close_prices)
+    
+    price_changes = np.diff(close_prices, prepend=close_prices[0])
+    gains = np.where(price_changes > 0, price_changes, 0.0)
+    losses = np.where(price_changes < 0, -price_changes, 0.0)
+    
+    df['price_change'] = price_changes
+    df['gain'] = gains
+    df['loss'] = losses
+    df['avg_gain'] = avg_gains
+    df['avg_loss'] = avg_losses
+    df['RS'] = rs_values
+    df['RSI'] = rsi_values
+    
+    # Calculate EMAs
+    for span in EMA_SPANS:
+        df[f'EMA_{span}'] = df['close'].ewm(span=span, adjust=False).mean()
+    
+    # Calculate MACD
+    df['macd'] = df['EMA_12'] - df['EMA_26']
+    df['signal'] = df['macd'].ewm(span=MACD_SIGNAL_PERIOD, adjust=False).mean()
+    df['macd_histogram'] = df['macd'] - df['signal']
+    
+    return df
+`;
+            
+            // Local_Maximas_Minimas Modul
+            const localMaxMinModule = `
+def Local_Max_Min(ohlc):
+    CL = ohlc["low"].tolist()
+    CH = ohlc["high"].tolist()
+    macd = ohlc["macd_histogram"].tolist()
+    
+    window_1 = 5
+    window_2 = 1
+    n = len(CL)
+    
+    # Initialize arrays
+    LM_High_window_1_CS = [0.0] * n
+    LM_High_window_2_CS = [0.0] * n
+    LM_Low_window_1_CS = [0.0] * n
+    LM_Low_window_2_CS = [0.0] * n
+    LM_High_window_1_MACD = [0.0] * n
+    LM_High_window_2_MACD = [0.0] * n
+    LM_Low_window_1_MACD = [0.0] * n
+    LM_Low_window_2_MACD = [0.0] * n
+    
+    # Find local maxima and minima for Candlestick
+    for i in range(window_1, n - window_1):
+        if all(CH[i] > CH[j] for j in range(i - window_1, i)) and all(CH[i] >= CH[j] for j in range(i + 1, i + window_1 + 1)):
+            LM_High_window_1_CS[i] = CH[i]
+    
+    for i in range(window_2, n - window_2):
+        if all(CH[i] > CH[j] for j in range(i - window_2, i)) and all(CH[i] >= CH[j] for j in range(i + 1, i + window_2 + 1)):
+            LM_High_window_2_CS[i] = CH[i]
+    
+    for i in range(window_1, n - window_1):
+        if all(CL[i] < CL[j] for j in range(i - window_1, i)) and all(CL[i] <= CL[j] for j in range(i + 1, i + window_1 + 1)):
+            LM_Low_window_1_CS[i] = CL[i]
+    
+    for i in range(window_2, n - window_2):
+        if all(CL[i] < CL[j] for j in range(i - window_2, i)) and all(CL[i] <= CL[j] for j in range(i + 1, i + window_2 + 1)):
+            LM_Low_window_2_CS[i] = CL[i]
+    
+    # Find local maxima and minima for MACD
+    for i in range(window_1, n - window_1):
+        if all(macd[i] > macd[j] for j in range(i - window_1, i)) and all(macd[i] >= macd[j] for j in range(i + 1, i + window_1 + 1)):
+            LM_High_window_1_MACD[i] = CH[i]
+    
+    for i in range(window_2, n - window_2):
+        if all(macd[i] > macd[j] for j in range(i - window_2, i)) and all(macd[i] >= macd[j] for j in range(i + 1, i + window_2 + 1)):
+            LM_High_window_2_MACD[i] = CH[i]
+    
+    for i in range(window_1, n - window_1):
+        if all(macd[i] < macd[j] for j in range(i - window_1, i)) and all(macd[i] <= macd[j] for j in range(i + 1, i + window_1 + 1)):
+            LM_Low_window_1_MACD[i] = CL[i]
+    
+    for i in range(window_2, n - window_2):
+        if all(macd[i] < macd[j] for j in range(i - window_2, i)) and all(macd[i] <= macd[j] for j in range(i + 1, i + window_2 + 1)):
+            LM_Low_window_2_MACD[i] = CL[i]
+    
+    # Assign to DataFrame
+    ohlc['LM_High_window_1_CS'] = LM_High_window_1_CS
+    ohlc['LM_High_window_2_CS'] = LM_High_window_2_CS
+    ohlc['LM_Low_window_1_CS'] = LM_Low_window_1_CS
+    ohlc['LM_Low_window_2_CS'] = LM_Low_window_2_CS
+    ohlc['LM_High_window_1_MACD'] = LM_High_window_1_MACD
+    ohlc['LM_High_window_2_MACD'] = LM_High_window_2_MACD
+    ohlc['LM_Low_window_1_MACD'] = LM_Low_window_1_MACD
+    ohlc['LM_Low_window_2_MACD'] = LM_Low_window_2_MACD
+    
+    return ohlc
+`;
+            
+            // CBullDivg_Analysis Modul (vereinfacht)
+            const cbullDivgModule = `
+def CBullDivg_analysis(ohlc, window, Candle_Tol, MACD_tol):
+    import numpy as np
+    import pandas as pd
+    
+    # Parameters
+    RSI_tol = 2
+    n = len(ohlc)
+    
+    # Initialize output columns
+    ohlc['CBullD_gen'] = 0
+    ohlc['CBullD_neg_MACD'] = 0
+    
+    # Convert columns to numeric
+    columns_to_convert = [
+        'LM_Low_window_2_CS', 'LM_Low_window_1_CS',
+        'LM_Low_window_2_MACD', 'LM_Low_window_1_MACD',
+        'RSI', 'macd_histogram'
+    ]
+    for col in columns_to_convert:
+        if col in ohlc.columns:
+            ohlc[col] = pd.to_numeric(ohlc[col], errors='coerce')
+    
+    # Simplified divergence detection
+    for i in range(window, n - 1):
+        # Check for local minima
+        if ohlc['LM_Low_window_2_CS'].iloc[i] > 0:
+            # Find previous local minimum
+            for j in range(i - 1, max(0, i - 50), -1):
+                if ohlc['LM_Low_window_1_CS'].iloc[j] > 0:
+                    # Check for bullish divergence
+                    price_diff = ohlc['LM_Low_window_2_CS'].iloc[i] - ohlc['LM_Low_window_1_CS'].iloc[j]
+                    rsi_diff = ohlc['RSI'].iloc[i] - ohlc['RSI'].iloc[j]
+                    macd_diff = ohlc['macd_histogram'].iloc[i] - ohlc['macd_histogram'].iloc[j]
+                    
+                    # Classic bullish divergence
+                    if price_diff < 0 and rsi_diff > 0 and macd_diff > 0:
+                        ohlc.loc[i, 'CBullD_gen'] = 1
+                        break
+                    
+                    # Negative MACD divergence
+                    if (ohlc['macd_histogram'].iloc[i] < 0 and 
+                        ohlc['macd_histogram'].iloc[j] < 0 and
+                        price_diff < 0 and macd_diff > 0):
+                        ohlc.loc[i, 'CBullD_neg_MACD'] = 1
+                        break
+    
+    return ohlc
+`;
+            
+            // Module in Pyodide laden
+            await pyodide.runPython(initializeModule);
+            await pyodide.runPython(localMaxMinModule);
+            await pyodide.runPython(cbullDivgModule);
+        }
+        
+        // Datei-Upload Handler
+        document.getElementById('fileInput').addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                document.getElementById('fileName').textContent = file.name;
+                try {
+                    showMessage('Lade Datei...', 'info');
+                    
+                    if (file.name.endsWith('.csv')) {
+                        const text = await file.text();
+                        fileData = text;
+                    } else if (file.name.endsWith('.parquet')) {
+                        const arrayBuffer = await file.arrayBuffer();
+                        fileData = new Uint8Array(arrayBuffer);
+                    }
+                    
+                    showMessage('Datei erfolgreich geladen!', 'success');
+                } catch (error) {
+                    showMessage('Fehler beim Laden der Datei: ' + error.message, 'error');
+                }
+            }
+        });
+        
+        // Variante hinzufügen
+        function addVariant() {
+            const name = document.getElementById('variantName').value || `Variante ${variants.length + 1}`;
+            const window = parseFloat(document.getElementById('window').value);
+            const candleTol = parseFloat(document.getElementById('candleTol').value);
+            const macdTol = parseFloat(document.getElementById('macdTol').value);
+            
+            const variant = {
+                id: variants.length,
+                name: name,
+                window: window,
+                candleTol: candleTol,
+                macdTol: macdTol,
+                color: variantColors[variants.length % variantColors.length],
+                visible: true
+            };
+            
+            variants.push(variant);
+            updateVariantsList();
+            document.getElementById('variantName').value = '';
+        }
+        
+        // Variantenliste aktualisieren
+        function updateVariantsList() {
+            const container = document.getElementById('variantsContainer');
+            container.innerHTML = '';
+            
+            variants.forEach((variant, index) => {
+                const item = document.createElement('div');
+                item.className = 'variant-item';
+                item.style.borderLeftColor = variant.color;
+                
+                item.innerHTML = `
+                    <div>
+                        <input type="checkbox" class="variant-toggle" 
+                               id="toggle_${variant.id}" 
+                               ${variant.visible ? 'checked' : ''}
+                               onchange="toggleVariant(${variant.id})">
+                        <label for="toggle_${variant.id}">
+                            <strong>${variant.name}</strong> - 
+                            Window: ${variant.window}, 
+                            Candle: ${variant.candleTol}%, 
+                            MACD: ${variant.macdTol}%
+                        </label>
+                    </div>
+                    <button class="remove-variant" onclick="removeVariant(${index})">✕</button>
+                `;
+                
+                container.appendChild(item);
+            });
+        }
+        
+        // Variante entfernen
+        function removeVariant(index) {
+            variants.splice(index, 1);
+            updateVariantsList();
+        }
+        
+        // Variante ein/ausblenden
+        function toggleVariant(id) {
+            const variant = variants.find(v => v.id === id);
+            if (variant) {
+                variant.visible = !variant.visible;
+            }
+        

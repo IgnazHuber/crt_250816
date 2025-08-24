@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+  <title>Bullish Divergence Analyzer</title>
+  <!-- Plotly für Charts -->
+  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+  <!-- Styles -->
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <header>
+      <h1>📈 Bullish Divergence Parameter Analyzer</h1>
+      <div class="version">v2.0 – Modular Edition</div>
+    </header>
+
+    <!-- Statusleiste -->
+    <div class="status-bar">
+      <div id="serverStatus" class="status-indicator">⚡ Verbindung prüfen...</div>
+      <div id="dataStatus"></div>
+    </div>
+
+    <!-- Zentrale Nachrichten-Ausgabe (für showMessage) -->
+    <div id="messageContainer"></div>
+
+    <!-- Datei-Upload -->
+    <div class="panel file-controls">
+      <h3>📁 Daten laden</h3>
+      <label class="file-label">
+        📂 CSV/Parquet auswählen
+        <input type="file" id="fileInput" accept=".csv,.parquet" />
+      </label>
+      <span id="fileName" class="file-name"></span>
+      <button id="clearData" class="btn btn-danger" style="display:none;">🗑️ Daten löschen</button>
+      <div id="uploadMsg"></div>
+    </div>
+
+    <!-- Parameter & Varianten -->
+    <div class="panel">
+      <h3>⚙️ Parameter & Varianten</h3>
+
+      <div class="param-grid">
+        <div>
+          <h4>Window Parameter</h4>
+          <label>
+            Window Size:
+            <input type="number" id="window" value="5" />
+          </label>
+        </div>
+
+        <div>
+          <h4>Toleranzen</h4>
+          <label>
+            Candle Tol (%):
+            <input type="number" id="candleTol" step="0.01" value="0.1" />
+          </label>
+          <label>
+            MACD Tol (%):
+            <input type="number" id="macdTol" step="0.01" value="3.25" />
+          </label>
+        </div>
+
+        <div>
+          <h4>Variantenname</h4>
+          <label>
+            <input type="text" id="variantName" value="Standard" />
+          </label>
+        </div>
+      </div>
+
+      <div class="action-buttons">
+        <button class="btn btn-success" onclick="addVariant()">➕ Add</button>
+        <button id="analyzeBtn" class="btn btn-primary" onclick="startAnalysis()" disabled>🚀 Analyze</button>
+        <button class="btn btn-secondary" onclick="saveConfig()">💾 Save</button>
+        <button class="btn btn-secondary" onclick="loadConfig()">📂 Load</button>
+      </div>
+
+      <div class="action-buttons compact">
+        <span style="color: #a0d0ff; font-size: 0.9em;">Presets:</span>
+        <button class="btn btn-preset" onclick="loadPreset('standard')">Standard</button>
+        <button class="btn btn-preset" onclick="loadPreset('conservative')">Conservative</button>
+        <button class="btn btn-preset" onclick="loadPreset('aggressive')">Aggressive</button>
+      </div>
+
+      <div id="variantsList">
+        <h4>Parametervarianten:</h4>
+        <!-- wird von app.js gefüllt -->
+      </div>
+    </div>
+
+    <!-- Analyse-Ergebnisse -->
+    <div id="resultsPanel" class="panel" style="display:none;">
+      <h3>📊 Analyseergebnisse</h3>
+      <div class="legend">
+        <div>▲ Classic Divergence (Preis vs. RSI)</div>
+        <div>◆ Hidden Divergence (Preis vs. MACD)</div>
+        <div>⬆️ Zusätzlich zur Basis</div>
+        <div>🔍 Klick auf Marker für Details</div>
+      </div>
+
+      <div id="statsContainer"></div>
+
+      <!-- Chart -->
+      <div id="mainChart" class="chart-container"></div>
+
+      <div class="action-buttons">
+        <button class="btn btn-primary" onclick="exportResults('json')">📄 JSON Export</button>
+        <button class="btn btn-primary" onclick="exportResults('csv')">📊 CSV Export</button>
+        <button class="btn btn-primary" onclick="exportValidation()">📑 XLSX Validierung</button>
+        <button class="btn btn-primary" onclick="toggleFullscreen()">🔍 Vollbild</button>
+      </div>
+    </div>
+
+    <!-- Validierungs-Panel -->
+    <div id="validationPanel" class="panel" style="display:none;">
+      <h3>🔍 Divergenz-Validierung</h3>
+      <button class="btn btn-danger" onclick="closeValidation()">✕ Schließen</button>
+      <div id="validationContainer"></div>
+    </div>
+  </div>
+
+  <!-- App-Script (am Ende laden) -->
+  <script src="/static/app.js"></script>
+</body>
+</html>

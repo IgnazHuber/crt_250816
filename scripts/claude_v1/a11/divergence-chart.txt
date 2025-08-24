@@ -1,0 +1,71 @@
+    // Erweiterte Divergenz-Erklärungen
+    const getDivergenceExplanation = (type, variant = 'standard') => {
+        const explanations = {
+            'Bullish Standard': {
+                short: [
+                    'Preis macht neues Tief',
+                    'Indikator zeigt höheres Tief',
+                    'Mögliche Trendwende nach oben'
+                ],
+                detailed: [
+                    'Der Preis bildet ein neues Tief, während der Indikator ein höheres Tief zeigt',
+                    'Dies deutet auf nachlassenden Verkaufsdruck hin',
+                    'Käufer beginnen möglicherweise, Kontrolle zu übernehmen',
+                    'Die Abwärtsdynamik schwächt sich ab',
+                    'Oft ein Zeichen für eine bevorstehende Aufwärtsbewegung',
+                    'Je stärker die Divergenz, desto wahrscheinlicher die Umkehr',
+                    'Bestätigung durch Volumen oder andere Indikatoren empfohlen',
+                    'Zeitrahmen beachten: Größere Zeitrahmen = stärkere Signale'
+                ],
+                reason: 'Nachlassender Verkaufsdruck trotz neuem Preistief'
+            },
+            'Bearish Standard': {
+                short: [
+                    'Preis macht neues Hoch',
+                    'Indikator zeigt niedrigeres Hoch',
+                    'Mögliche Trendwende nach unten'
+                ],
+                detailed: [
+                    'Der Preis erreicht ein neues Hoch, aber der Indikator bildet ein niedrigeres Hoch',
+                    'Dies signalisiert nachlassenden Kaufdruck',
+                    'Die Aufwärtsdynamik verliert an Kraft',
+                    'Verkäufer könnten bald die Kontrolle übernehmen',
+                    'Häufig ein Vorbote einer Abwärtsbewegung',
+                    'Die Divergenz zeigt eine Schwäche im Aufwärtstrend',
+                    'Vorsicht bei Long-Positionen ist geboten',
+                    'Zusätzliche Bestätigung durch Widerstandsniveaus suchen'
+                ],
+                reason: 'Schwächender Kaufdruck trotz neuem Preishoch'
+            },
+            'Bullish Hidden': {
+                short: [
+                    'Preis macht höheres Tief',
+                    'Indikator zeigt niedrigeres Tief',
+                    'Fortsetzung des Aufwärtstrends'
+                ],
+                detailed: [
+                    'Der Preis bildet ein höheres Tief (Aufwärtstrend intakt)',
+                    'Der Indikator zeigt jedoch ein niedrigeres Tief',
+                    'Dies bestätigt die Stärke des bestehenden Aufwärtstrends',
+                    'Temporäre Korrektur im übergeordneten Aufwärtstrend',
+                    'Käufer nutzen Rücksetzer als Kaufgelegenheit',
+                    'Der Trend hat noch Momentum für weitere Anstiege',
+                    'Ideal für Trendfolge-Strategien',
+                    'Pullback-Käufe können profitabel sein',
+                    'Risiko-Management: Stop-Loss unter dem Tief setzen'
+                ],
+                reason: 'Bestätigung der Aufwärtstrend-Fortsetzung'
+            },
+            'Bearish Hidden': {
+                short: [
+                    'Preis macht niedrigeres Hoch',
+                    'Indikator zeigt höheres Hoch',
+                    'Fortsetzung des Abwärtstrends'
+                ],
+                detailed: [
+                    'Der Preis bildet ein niedrigeres Hoch (Abwärtstrend intakt)',
+                    'Der Indikator zeigt jedoch ein höheres Hoch',
+                    'Dies bestätigt die Fortsetzung des Abwärtstrends',
+                    'Die Rally ist nur eine temporäre    // Info-Box für Marker-Divergenz-Infos
+    const [infoBoxData, setInfoBoxData] = useState(null);
+    const [infoBoxPosition, setInfoBoxPosition] = useState({ x: 0, y: 0 });

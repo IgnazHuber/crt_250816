@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Advanced Divergence Analysis System</title>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/recharts@2.5.0/dist/Recharts.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <style>
+        .curved-arrow {
+            fill: none;
+            stroke-width: 2;
+            marker-end: url(#arrowhead);
+        }
+        .curved-arrow.bullish {
+            stroke: #10b981;
+        }
+        .curved-arrow.bearish {
+            stroke: #ef4444;
+        }
+        .extrema-score {
+            font-size: 10px;
+            font-weight: bold;
+        }
+        .validation-icon {
+            animation: fadeIn 0.3s ease-in;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: scale(0.8); }
+            to { opacity: 1; transform: scale(1); }
+        }
+        .candlestick {
+            transition: opacity 0.2s;
+        }
+        .candlestick:hover {
+            opacity: 0.8;
+        }
+        .divergence-label {
+            font-size: 11px;
+            font-weight: 600;
+            text-anchor: middle;
+        }
+    </style>
+</head>
+<body class="bg-gray-100">
+    <div id="root"></div>
+    
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useCallback, useRef } = React;
+        const { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceDot, AreaChart, Area, ComposedChart, Bar } = Recharts;
+
+        // Modul 1: Divergenz-Erkennung und Scoring
+        class DivergenceAnalyzer {
+            constructor(data) {
+                this.data = data;
+                this.extremaScores = new Map();
+            }
+
+            // Berechne Stärke von lokalen Extrema
+            calculateExtremaStrength(index, isHigh, values) {
+                const window = 10;
+                const start = Math.max(0, index - window);
+                const end = Math.min(values.length - 1, index + window);
+                
+                let score = 0;
+                const currentValue = values[index];
+                
+                for (let i = start; i <= end; i++) {
+                    if (i === index) continue;
+                    const diff = isHigh ? 
+                        (currentValue - values[i]) / currentValue : 
+                        (values[i] - currentValue) / currentValue;
+                    score += Math.max(0, diff);
+                }
+                
+                // Normalisiere Score (0-100)
+                return Math.min(100, score * 100 / (end - start));
+            }
+
+            findExtrema(values, type = 'both') {
+                const extrema = [];
+                const minDistance = 3;
+                
+                for (let i = minDistance; i < values.length - minDistance; i++) {
+                    const current = values[i];
+                    const prevValues = values.slice(Math.max(0, i - minDistance), i);
+                    const nextValues = values.slice(i + 1, Math.min(values.length, i + minDistance + 1));
+                    
+                    const isHigh = prevValues.every(v => v <= current) && nextValues.every(v => v <= current);
+                    const isLow = prevValues.every(v => v >= current) && nextValues.every(v => v >= current);
+                    
+                    if ((type === 'high' || type === 'both') && isHigh) {
+                        const strength = this.calculateExtremaStrength(i, true, values);
+                        extrema.push({ index: i, value: current, type: 'high', strength });
+                        this.extremaScores.set(`${i}-high`, strength);
+                    }
+                    
+                    if ((type === 'low' || type === 'both') && isLow) {
+                        const strength = this.calculateExtremaStrength(i, false, values);
+                        extrema.push({ index: i, value: current, type: 'low', strength });
+                        this.extremaScores.set(`${i}-low`, strength);
+                    }
+                }
+                
+                return extrema;
+            }
+
+            detectDivergences() {
+                const priceValues = this.data.map(d => d.price);
+                const rsiValues = this.data.map(d => d.rsi);
+                const macdValues = this.data.map(d => d.macd);
+                
+                const priceHighs = this.findExtrema(priceValues, 'high');
+                const priceLows = this.findExtrema(priceValues, 'low');
+                const rsiHighs = this.findExtrema(rsiValues, 'high');
+                const rsiLows = this.findExtrema(rsiValues, 'low');
+                const macdHighs = this.findExtrema(macdValues, 'high');
+                const macdLows = this.findExtrema(macdValues, 'low');
+                
+                const divergences = [];
+                
+                // Standard Bearish Divergenz (RSI)
+                this.findStandardDivergences(priceHighs, rsiHighs, 'Bearish', 'RSI', divergences);
+                this.findStandardDivergences(priceLows, rsiLows, 'Bullish', 'RSI', divergences);
+                
+                // Standard Divergenz (MACD)
+                this.findStandardDivergences(priceHighs, macdHighs, 'Bearish', 'MACD', divergences);
+                this.findStandardDivergences(priceLows, macdLows, 'Bullish', 'MACD', divergences);
+                
+                // Hidden Divergenzen
+                this.findHiddenDivergences(priceLows, rsiLows, 'Bullish', 'RSI', divergences);
+                this.findHiddenDivergences(priceHighs, rsiHighs, 'Bearish', 'RSI', divergences);
+                
+                return divergences;
+            }
+
+            findStandardDivergences(priceExtrema, indicatorExtrema, type, indicator, divergences) {
+                const maxDistance = 30;
+                const minDistance = 5;
+                
+                for (let i = 0; i < priceExtrema.length - 1; i++) {
+                    for (let j = i + 1; j < priceExtrema.length; j++) {
+                        const p1 = priceExtrema[i];
+                        const p2 = priceExtrema[j];
+                        const distance = p2.index - p1.index;
+                        
+                        if (distance < minDistance || distance > maxDistance) continue;
+                        
+                        // Finde korrespondierende Indikator-Extrema
+                        const ind1 = indicatorExtrema.find(e => Math.abs(e.index - p1.index) <= 3);
+                        const ind2 = indicatorExtrema.find(e => Math.abs(e.index - p2.index) <= 3);
+                        
+                        if (!ind1 || !ind2) continue;
+                        
+                        let isDivergence = false;
+                        
+                        if (type === 'Bearish') {
+                            isDivergence = p2.value > p1.value && ind2.value < ind1.value;
+                        } else {
+                            isDivergence = p2.value < p1.value && ind2.value > ind1.value;
+                        }
+                        
+                        if (isDivergence) {
+                            const strength = Math.abs((ind2.value - ind1.value) / ind1.value) / 
+                                           Math.abs((p2.value - p1.value) / p1.value);
+                            
+                            divergences.push({
+                                type: `${type} Standard`,
+                                indicator,
+                                startIndex: p1.index,
+                                endIndex: p2.index,
+                                priceStart: p1.value,
+                                priceEnd: p2.value,
+                                indicatorStart: ind1.value,
+                                indicatorEnd: ind2.value,
+                                strength: Math.min(100, strength * 50),
+                                extremaStrength: (p1.strength + p2.strength + ind1.strength + ind2.strength) / 4
+                            });
+                        }
+                    }
+                }
+            }
+
+            findHiddenDivergences(priceExtrema, indicatorExtrema, type, indicator, divergences) {
+                const maxDistance = 30;
+                const minDistance = 5;
+                
+                for (let i = 0; i < priceExtrema.length - 1; i++) {
+                    for (let j = i + 1; j < priceExtrema.length; j++) {
+                        const p1 = priceExtrema[i];
+                        const p2 = priceExtrema[j];
+                        const distance = p2.index - p1.index;
+                        
+                        if (distance < minDistance || distance > maxDistance) continue;
+                        
+                        const ind1 = indicatorExtrema.find(e => Math.abs(e.index - p1.index) <= 3);
+                        const ind2 = indicatorExtrema.find(e => Math.abs(e.index - p2.index) <= 3);
+                        
+                        if (!ind1 || !ind2) continue;
+                        
+                        let isDivergence = false;
+                        
+                        if (type === 'Bullish') {
+                            isDivergence = p2.value > p1.value && ind2.value < ind1.value;
+                        } else {
+                            isDivergence = p2.value < p1.value && ind2.value > ind1.value;
+                        }
+                        
+                        if (isDivergence) {
+                            const strength = Math.abs((ind2.value - ind1.value) / ind1.value) / 
+                                           Math.abs((p2.value - p1.value) / p1.value);
+                            
+                            divergences.push({
+                                type: `${type} Hidden`,
+                                indicator,
+                                startIndex: p1.index,
+                                endIndex: p2.index,
+                                priceStart: p1.value,
+                                priceEnd: p2.value,
+                                indicatorStart: ind1.value,
+                                indicatorEnd: ind2.value,
+                                strength: Math.min(100, strength * 50),
+                                extremaStrength: (p1.strength + p2.strength + ind1.strength + ind2.strength) / 4
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // Modul 2: Divergenz-Validierung
+        class DivergenceValidator {
+            constructor(data, divergences) {
+                this.data = data;
+                this.divergences = divergences;
+            }
+
+            validateDivergence(divergence, lookForward = 10) {
+                const endIndex = divergence.endIndex;
+                const startValidation = Math.min(endIndex + 1, this.data.length - 1);
+                const endValidation = Math.min(endIndex + lookForward, this.data.length - 1);
+                
+                if (startValidation >= this.data.length) {
+                    return { valid: null, reason: 'Insufficient data', priceChange: 0 };
+                }
+                
+                const priceAtSignal = this.data[endIndex].price;
+                const pricesAfter = this.data.slice(startValidation, endValidation).map(d => d.price);
+                
+                if (pricesAfter.length === 0) {
+                    return { valid: null, reason: 'No data after signal', priceChange: 0 };
+                }
+                
+                const maxPrice = Math.max(...pricesAfter);
+                const minPrice = Math.min(...pricesAfter);
+                
+                if (divergence.type.includes('Bullish')) {
+                    const priceIncrease = ((maxPrice - priceAtSignal) / priceAtSignal) * 100;
+                    const valid = priceIncrease > 2; // Mindestens 2% Anstieg
+                    return {
+                        valid,
+                        reason: valid ? `Price increased ${priceIncrease.toFixed(2)}%` : `Only ${priceIncrease.toFixed(2)}% increase`,
+                        priceChange: priceIncrease,
+                        targetPrice: maxPrice
+                    };
+                } else {
+                    const priceDecrease = ((priceAtSignal - minPrice) / priceAtSignal) * 100;
+                    const valid = priceDecrease > 2; // Mindestens 2% Rückgang
+                    return {
+                        valid,
+                        reason: valid ? `Price decreased ${priceDecrease.toFixed(2)}%` : `Only ${priceDecrease.toFixed(2)}% decrease`,
+                        priceChange: -priceDecrease,
+                        targetPrice: minPrice
+                    };
+                }
+            }
+
+            validateAll() {
+                return this.divergences.map(div => ({
+                    ...div,
+                    validation: this.validateDivergence(div)
+                }));
+            }
+        }
+
+        // Hauptkomponente
+        function AdvancedDivergenceSystem() {
+            const [data, setData] = useState([]);
+            const [divergences, setDivergences] = useState([]);
+            const [validatedDivergences, setValidatedDivergences] = useState([]);
+            const [selectedDivergence, setSelectedDivergence] = useState(null);
+            const [showValidation, setShowValidation] = useState(true);
+            const [extremaScores, setExtremaScores] = useState(new Map());
+
+            // Generiere Beispieldaten mit Candlestick-Informationen
+            useEffect(() => {
+                const generateData = () => {
+                    const points = [];
+                    const basePrice = 100;
+                    
+                    for (let i = 0; i < 150; i++) {
+                        const trend = Math.sin(i * 0.08) * 20;
+                        const noise = (Math.random() - 0.5) * 5;
+                        const price = basePrice + trend + noise;
+                        
+                        // Candlestick Daten
+                        const open = price + (Math.random() - 0.5) * 2;
+                        const close = price + (Math.random() - 0.5) * 2;
+                        const high = Math.max(open, close) + Math.random() * 1;
+                        const low = Math.min(open, close) - Math.random() * 1;
+                        
+                        // RSI Berechnung (vereinfacht)
+                        const rsi = 50 + Math.sin(i * 0.1 + 0.3) * 30 + (Math.random() - 0.5) * 10;
+                        
+                        // MACD Berechnung (vereinfacht)
+                        const macd = Math.sin(i * 0.09 + 0.7) * 5 + (Math.random() - 0.5) * 2;
+                        const signal = Math.sin(i * 0.09 + 0.8) * 4;
+                        
+                        points.push({
+                            index: i,
+                            date: new Date(2024, 0, i + 1).toISOString().split('T')[0],
+                            price: parseFloat(price.toFixed(2)),
+                            open: parseFloat(open.toFixed(2)),
+                            high: parseFloat(high.toFixed(2)),
+                            low: parseFloat(low.toFixed(2)),
+                            close: parseFloat(close.toFixed(2)),
+                            rsi: parseFloat(Math.max(0, Math.min(100, rsi)).toFixed(2)),
+                            macd: parseFloat(macd.toFixed(3)),
+                            signal: parseFloat(signal.toFixed(3)),
+                            histogram: parseFloat((macd - signal).toFixed(3))
+                        });
+                    }
+                    return points;
+                };
+
+                const newData = generateData();
+                setData(newData);
+                
+                // Analysiere Divergenzen
+                const analyzer = new DivergenceAnalyzer(newData);
+                const detectedDivergences = analyzer.detectDivergences();
+                setDivergences(detectedDivergences);
+                setExtremaScores(analyzer.extremaScores);
+                
+                // Validiere Divergenzen
+                const validator = new DivergenceValidator(newData, detectedDivergences);
+                const validated = validator.validateAll();
+                setValidatedDivergences(validated);
+            }, []);
+
+            // Custom Candlestick Component
+            const Candlestick = ({ x, y, width, height, payload }) => {
+                const { open, close, high, low } = payload;
+                const bullish = close > open;
+                const color = bullish ? '#10b981' : '#ef4444';
+                const bodyHeight = Math.abs(close - open) * (height / (payload.high - payload.low));
+                const bodyY = y + (high - Math.max(open, close)) * (height / (high - low));
+                
+                return (
+                    <g className="candlestick">
+                        <line
+                            x1={x + width / 2}
+                            y1={y}
+                            x2={x + width / 2}
+                            y2={y + height}
+                            stroke={color}
+                            strokeWidth={1}
+                        />
+                        <rect
+                            x={x + width * 0.2}
+                            y={bodyY}
+                            width={width * 0.6}
+                            height={bodyHeight || 1}
+                            fill={bullish ? color : 'white'}
+                            stroke={color}
+                            strokeWidth={1}
+                        />
+                    </g>
+                );
+            };
+
+            // Gebogener Pfeil für Divergenzen
+            const CurvedArrow = ({ startX, startY, endX, endY, type, label }) => {
+                const midX = (startX + endX) / 2;
+                const midY = type.includes('Bullish') ? startY - 30 : startY + 30;
+                
+                const path = `M ${startX} ${startY} Q ${midX} ${midY} ${endX} ${endY}`;
+                
+                return (
+                    <g>
+                        <defs>
+                            <marker
+                                id="arrowhead"
+                                markerWidth="10"
+                                markerHeight="10"
+                                refX="9"
+                                refY="3"
+                                orient="auto"
+                            >
+                                <polygon
+                                    points="0 0, 10 3, 0 6"
+                                    fill={type.includes('Bullish') ? '#10b981' : '#ef4444'}
+                                />
+                            </marker>
+                        </defs>
+                        <path
+                            d={path}
+                            className={`curved-arrow ${type.includes('Bullish') ? 'bullish' : 'bearish'}`}
+                            markerEnd="url(#arrowhead)"
+                        />
+                        {label && (
+                            <text
+                                x={midX}
+                                y={midY - 5}
+                                className="divergence-label"
+                                fill={type.includes('Bullish') ? '#10b981' : '#ef4444'}
+                            >
+                                {label}
+                            </text>
+                        )}
+                    </g>
+                );
+            };
+
+            // Validierungs-Icon
+            const ValidationIcon = ({ x, y, valid }) => {
+                if (valid === null) return null;
+                
+                return (
+                    <g className="validation-icon" transform={`translate(${x}, ${y})`}>
+                        {valid ? (
+                            <g>
+                                <circle r="8" fill="#10b981" />
+                                <path
+                                    d="M-4,0 L-1,3 L4,-3"
+                                    stroke="white"
+                                    strokeWidth="2"
+                                    fill="none"
+                                />
+                            </g>
+                        ) : (
+                            <g>
+                                <circle r="8" fill="#ef4444" />
+                                <text
+                                    y="4"
+                                    textAnchor="middle"
+                                    fill="white"
+                                    fontSize="12"
+                                    fontWeight="bold"
+                                >
+                                    !
+                                </text>
+                            </g>
+                        )}
+                    </g>
+                );
+            };
+
+            // Export zu Excel
+            const exportToExcel = () => {
+                const ws_data = [
+                    ['Divergenz Typ', 'Indikator', 'Start Index', 'End Index', 'Stärke (%)', 
+                     'Extrema Score', 'Validierung', 'Preis Änderung (%)', 'Grund']
+                ];
+                
+                validatedDivergences.forEach(div => {
+                    ws_data.push([
+                        div.type,
+                        div.indicator,
+                        div.startIndex,
+                        div.endIndex,
+                        div.strength.toFixed(2),
+                        div.extremaStrength.toFixed(2),
+                        div.validation.valid === null ? 'Unbekannt' : (div.validation.valid ? 'Korrekt' : 'Falsch'),
+                        div.validation.priceChange.toFixed(2),
+                        div.validation.reason
+                    ]);
+                });
+                
+                const ws = XLSX.utils.aoa_to_sheet(ws_data);
+                const wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, "Divergenzen");
+                
+                // Füge Zusammenfassung hinzu
+                const summary_data = [
+                    ['Zusammenfassung'],
+                    [''],
+                    ['Metrik', 'Wert'],
+                    ['Gesamt Divergenzen', validatedDivergences.length],
+                    ['Korrekte Signale', validatedDivergences.filter(d => d.validation.valid === true).length],
+                    ['Falsche Signale', validatedDivergences.filter(d => d.validation.valid === false).length],
+                    ['Erfolgsrate (%)', ((validatedDivergences.filter(d => d.validation.valid === true).length / 
+                                         validatedDivergences.filter(d => d.validation.valid !== null).length) * 100).toFixed(2)]
+                ];
+                
+                const ws_summary = XLSX.utils.aoa_to_sheet(summary_data);
+                XLSX.utils.book_append_sheet(wb, ws_summary, "Zusammenfassung");
+                
+                XLSX.writeFile(wb, `divergenz-analyse-${Date.now()}.xlsx`);
+                alert('Excel-Datei wurde in Ihren Download-Ordner exportiert!');
+            };
+
+            return (
+                <div className="p-6 max-w-7xl mx-auto">
+                    <h1 className="text-3xl font-bold mb-6">Advanced Divergence Analysis System</h1>
+                    
+                    {/* Kontrollen */}
+                    <div className="bg-white rounded-lg shadow-md p-4 mb-6">
+                        <div className="flex gap-4 items-center">
+                            <label className="flex items-center">
+                                <input
+                                    type="checkbox"
+                                    checked={showValidation}
+                                    onChange={(e) => setShowValidation(e.target.checked)}
+                                    className="mr-2"
+                                />
+                                <span>Validierung anzeigen</span>
+                            </label>
+                            
+                            <button
+                                onClick={exportToExcel}
+                                className="ml-auto px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600"
+                            >
+                                Export zu Excel
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Candlestick Chart */}
+                    <div className="bg-white rounded-lg shadow-md p-4 mb-6">
+                        <h2 className="text-xl font-bold mb-4">Candlestick Chart mit Divergenz-Markierungen</h2>
+                        <ResponsiveContainer width="100%" height={300}>
+                            <ComposedChart data={data} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
+                                <CartesianGrid strokeDasharray="3 3" />
+                                <XAxis dataKey="index" />
+                                <YAxis />
+                                <Tooltip />
+                                <Bar dataKey="high" fill="transparent" shape={Candlestick} />
+                                
+                                {/* Divergenz-Pfeile */}
+                                {validatedDivergences.map((div, idx) => {
+                                    const startData = data[div.startIndex];
+                                    const endData = data[div.endIndex];
+                                    if (!startData || !endData) return null;
+                                    
+                                    const yValue = div.type.includes('Bullish') ? 
+                                        Math.min(startData.low, endData.low) - 5 :
+                                        Math.max(startData.high, endData.high) + 5;
+                                    
+                                    return (
+                                        <g key={idx}>
+                                            <CurvedArrow
+                                                startX={div.startIndex * 6}
+                                                startY={250 - yValue}
+                                                endX={div.endIndex * 6}
+                                                endY={250 - yValue}
+                                                type={div.type}
+                                            />
+                                            {showValidation && (
+                                                <ValidationIcon
+                                                    x={(div.startIndex + div.endIndex) / 2 * 6}
+                                                    y={250 - yValue - 20}
+                                                    valid={div.validation.valid}
+                                                />
+                                            )}
+                                        </g>
+                                    );
+                                })}
+                            </ComposedChart>
+                        </ResponsiveContainer>
+                    </div>
+
+                    {/* RSI Chart */}
+                    <div className="bg-white rounded-lg shadow-md p-4 mb-6">
+                        <h2 className="text-xl font-bold mb-4">RSI mit Divergenzen</h2>
+                        <ResponsiveContainer width="100%" height={200}>
+                            <LineChart data={data} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
+                                <CartesianGrid strokeDasharray="3 3" />
+                                <XAxis dataKey="index" />
+                                <YAxis domain={[0, 100]} />
+                                <Tooltip />
+                                <Line type="monotone" dataKey="rsi" stroke="#8b5cf6" strokeWidth={2} dot={false} />
+                                
+                                {/* Überkauft/Überverkauft Linien */}
+                                <ReferenceLine y={70} stroke="#ef4444" strokeDasharray="5 5" />
+                                <ReferenceLine y={30} stroke="#10b981" strokeDasharray="5 5" />
+                                
+                                {/* RSI Divergenz-Pfeile */}
+                                {validatedDivergences.filter(d => d.indicator === 'RSI').map((div, idx) => (
+                                    <g key={idx}>
+                                        <CurvedArrow
+                                            startX={div.startIndex * 6}
+                                            startY={150 - div.indicatorStart * 1.5}
+                                            endX={div.endIndex * 6}
+                                            endY={150 - div.indicatorEnd * 1.5}
+                                            type={div.type}
+                                        />
+                                    </g>
+                                ))}
+                                
+                                {/* Extrema Scores */}
+                                {Array.from(extremaScores.entries()).map(([key, score]) => {
+                                    const [index, type] = key.split('-');
+                                    const point = data[parseInt(index)];
+                                    if (!point || !point.rsi) return null;
+                                    
+                                    return (
+                                        <g key={key}>
+                                            <circle
+                                                cx={parseInt(index) * 6}
+                                                cy={150 - point.rsi * 1.5}
+                                                r="3"
+                                                fill={type === 'high' ? '#ef4444' : '#10b981'}
+                                            />
+                                            <text
+                                                x={parseInt(index) * 6}
+                                                y={150 - point.rsi * 1.5 - 8}
+                                                className="extrema-score"
+                                                textAnchor="middle"
+                                            >
+                                                {score.toFixed(0)}
+                                            </text>
+                                        </g>
+                                    );
+                                })}
+                            </LineChart>
+                        </ResponsiveContainer>
+                    </div>
+
+                    {/* MACD Chart */}
+                    <div className="bg-white rounded-lg shadow-md p-4 mb-6">
+                        <h2 className="text-xl font-bold mb-4">MACD mit Divergenzen</h2>
+                        <ResponsiveContainer width="100%" height={200}>
+                            <ComposedChart data={data} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
+                                <CartesianGrid strokeDasharray="3 3" />
+                                <XAxis dataKey="index" />
+                                <YAxis />
+                                <Tooltip />
+                                <Bar dataKey="histogram" fill="#94a3b8" />
+                                <Line type="monotone" dataKey="macd" stroke="#3b82f6" strokeWidth={2} dot={false} />
+                                <Line type="monotone" dataKey="signal" stroke="#ef4444" strokeWidth={2} dot={false} />
+                                
+                                {/* MACD Divergenz-Pfeile mit Labels */}
+                                {validatedDivergences.filter(d => d.indicator === 'MACD').map((div, idx) => {
+                                    const label = div.type.includes('Bullish') ? 
+                                        (div.type.includes('Hidden') ? 'BH' : 'BS') :
+                                        (div.type.includes('Hidden') ? 'BeH' : 'BeS');
+                                    
+                                    return (
+                                        <g key={idx}>
+                                            <CurvedArrow
+                                                startX={div.startIndex * 6}
+                                                startY={100 - div.indicatorStart * 10}
+                                                endX={div.endIndex * 6}
+                                                endY={100 - div.indicatorEnd * 10}
+                                                type={div.type}
+                                                label={label}
+                                            />
+                                        </g>
+                                    );
+                                })}
+                            </ComposedChart>
+                        </ResponsiveContainer>
+                    </div>
+
+                    {/* Validierungstabelle */}
+                    <div className="bg-white rounded-lg shadow-md p-4">
+                        <h2 className="text-xl font-bold mb-4">Divergenz-Validierung</h2>
+                        <div className="overflow-x-auto">
+                            <table className="min-w-full">
+                                <thead>
+                                    <tr className="bg-gray-100">
+                                        <th className="px-4 py-2 text-left">Typ</th>
+                                        <th className="px-4 py-2 text-left">Indikator</th>
+                                        <th className="px-4 py-2 text-left">Periode</th>
+                                        <th className="px-4 py-2 text-left">Stärke</th>
+                                        <th className="px-4 py-2 text-left">Extrema Score</th>
+                                        <th className="px-4 py-2 text-left">Validierung</th>
+                                        <th className="px-4 py-2 text-left">Preis Δ</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {validatedDivergences.map((div, idx) => (
+                                        <tr 
+                                            key={idx}
+                                            className={`border-b hover:bg-gray-50 cursor-pointer ${
+                                                selectedDivergence === idx ? 'bg-blue-50' : ''
+                                            }`}
+                                            onClick={() => setSelectedDivergence(idx)}
+                                        >
+                                            <td className={`px-4 py-2 font-medium ${
+                                                div.type.includes('Bullish') ? 'text-green-600' : 'text-red-600'
+                                            }`}>
+                                                {div.type}
+                                            </td>
+                                            <td className="px-4 py-2">{div.indicator}</td>
+                                            <td className="px-4 py-2">{div.startIndex} → {div.endIndex}</td>
+                                            <td className="px-4 py-2">
+                                                <div className="w-full bg-gray-200 rounded-full h-2">
+                                                    <div 
+                                                        className="bg-blue-600 h-2 rounded-full"
+                                                        style={{ width: `${div.strength}%` }}
+                                                    />
+                                                </div>
+                                                <span className="text-xs">{div.strength.toFixed(1)}%</span>
+                                            </td>
+                                            <td className="px-4 py-2">{div.extremaStrength.toFixed(1)}</td>
+                                            <td className="px-4 py-2">
+                                                {div.validation.valid === null ? (
+                                                    <span className="text-gray-500">-</span>
+                                                ) : div.validation.valid ? (
+                                                    <span className="text-green-600">✓</span>
+                                                ) : (
+                                                    <span className="text-red-600">✗</span>
+                                                )}
+                                            </td>
+                                            <td className="px-4 py-2">
+                                                <span className={div.validation.priceChange > 0 ? 'text-green-600' : 'text-red-600'}>
+                                                    {div.validation.priceChange.toFixed(2)}%
+                                                </span>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                        
+                        {/* Statistiken */}
+                        <div className="mt-6 grid grid-cols-3 gap-4">
+                            <div className="bg-gray-50 p-4 rounded-lg">
+                                <div className="text-2xl font-bold text-blue-600">
+                                    {validatedDivergences.length}
+                                </div>
+                                <div className="text-sm text-gray-600">Gesamt Divergenzen</div>
+                            </div>
+                            <div className="bg-green-50 p-4 rounded-lg">
+                                <div className="text-2xl font-bold text-green-600">
+                                    {validatedDivergences.filter(d => d.validation.valid === true).length}
+                                </div>
+                                <div className="text-sm text-gray-600">Korrekte Signale</div>
+                            </div>
+                            <div className="bg-red-50 p-4 rounded-lg">
+                                <div className="text-2xl font-bold text-red-600">
+                                    {validatedDivergences.filter(d => d.validation.valid === false).length}
+                                </div>
+                                <div className="text-sm text-gray-600">Falsche Signale</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        ReactDOM.render(<AdvancedDivergenceSystem />, document.getElementById('root'));
+    </script>
+</body>
+</html>

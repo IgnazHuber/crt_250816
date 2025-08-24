@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bullish Divergence Parameter Analyzer</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.27.0/plotly.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1e3c72, #2a5298);
+            min-height: 100vh;
+            color: #fff;
+        }
+        
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 2.5em;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        .control-panel {
+            background: rgba(255,255,255,0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+        }
+        
+        .file-input-container {
+            margin-bottom: 20px;
+        }
+        
+        .file-input-label {
+            display: inline-block;
+            padding: 12px 24px;
+            background: linear-gradient(45deg, #4CAF50, #45a049);
+            color: white;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: bold;
+            box-shadow: 0 4px 15px rgba(76,175,80,0.3);
+        }
+        
+        .file-input-label:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(76,175,80,0.4);
+        }
+        
+        input[type="file"] {
+            display: none;
+        }
+        
+        .file-name {
+            margin-left: 15px;
+            font-size: 14px;
+            color: #a0d0ff;
+        }
+        
+        .parameters-section {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        
+        .parameter-group {
+            background: rgba(255,255,255,0.05);
+            padding: 15px;
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        
+        .parameter-group h3 {
+            margin-bottom: 10px;
+            color: #a0d0ff;
+            font-size: 1.1em;
+        }
+        
+        .parameter-input {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        
+        .parameter-input label {
+            font-size: 0.9em;
+            color: #ddd;
+        }
+        
+        .parameter-input input {
+            width: 80px;
+            padding: 5px;
+            border: 1px solid rgba(255,255,255,0.2);
+            background: rgba(255,255,255,0.1);
+            color: white;
+            border-radius: 5px;
+            text-align: center;
+        }
+        
+        .add-variant-btn {
+            padding: 10px 20px;
+            background: linear-gradient(45deg, #FF6B6B, #FF8E53);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.3s;
+            margin-right: 10px;
+        }
+        
+        .add-variant-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(255,107,107,0.4);
+        }
+        
+        .analyze-btn {
+            padding: 12px 30px;
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 1.1em;
+            transition: all 0.3s;
+        }
+        
+        .analyze-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102,126,234,0.4);
+        }
+        
+        .analyze-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .variants-list {
+            background: rgba(255,255,255,0.05);
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 20px;
+        }
+        
+        .variant-item {
+            background: rgba(255,255,255,0.1);
+            padding: 10px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-left: 4px solid;
+        }
+        
+        .variant-toggle {
+            margin-right: 10px;
+        }
+        
+        .remove-variant {
+            padding: 5px 10px;
+            background: #ff4444;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 0.9em;
+        }
+        
+        .chart-container {
+            background: rgba(255,255,255,0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+        }
+        
+        .stats-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+        
+        .stats-card {
+            background: rgba(255,255,255,0.1);
+            padding: 20px;
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 20px;
+            font-size: 1.2em;
+            color: #a0d0ff;
+        }
+        
+        .error {
+            background: rgba(255,0,0,0.1);
+            border: 1px solid rgba(255,0,0,0.3);
+            padding: 15px;
+            border-radius: 8px;
+            color: #ff6b6b;
+            margin-top: 10px;
+        }
+        
+        .success {
+            background: rgba(0,255,0,0.1);
+            border: 1px solid rgba(0,255,0,0.3);
+            padding: 15px;
+            border-radius: 8px;
+            color: #6bff6b;
+            margin-top: 10px;
+        }
+        
+        .server-status {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            padding: 10px;
+            background: rgba(0,0,0,0.5);
+            border-radius: 8px;
+            font-size: 0.9em;
+        }
+        
+        .status-online {
+            color: #00ff00;
+        }
+        
+        .status-offline {
+            color: #ff0000;
+        }
+    </style>
+</head>
+<body>
+    <div class="server-status" id="serverStatus">
+        <span id="statusText">⚡ Verbindung prüfen...</span>
+    </div>
+    
+    <div class="container">
+        <h1>🔍 Bullish Divergence Parameter Analyzer</h1>
+        <p style="text-align: center; margin-bottom: 20px; opacity: 0.8;">
+            Python-basierte Analyse mit originalen Modulen
+        </p>
+        
+        <div class="control-panel">
+            <div class="file-input-container">
+                <label for="fileInput" class="file-input-label">
+                    📁 CSV/Parquet-Datei auswählen
+                </label>
+                <input type="file" id="fileInput" accept=".csv,.parquet">
+                <span class="file-name" id="fileName">Keine Datei ausgewählt</span>
+            </div>
+            
+            <div class="parameters-section">
+                <div class="parameter-group">
+                    <h3>Window Parameter</h3>
+                    <div class="parameter-input">
+                        <label>Window Size:</label>
+                        <input type="number" id="window" value="5" min="1" max="20">
+                    </div>
+                </div>
+                
+                <div class="parameter-group">
+                    <h3>Toleranzen</h3>
+                    <div class="parameter-input">
+                        <label>Candle Tol (%):</label>
+                        <input type="number" id="candleTol" value="0.1" step="0.01" min="0">
+                    </div>
+                    <div class="parameter-input">
+                        <label>MACD Tol (%):</label>
+                        <input type="number" id="macdTol" value="3.25" step="0.01" min="0">
+                    </div>
+                </div>
+                
+                <div class="parameter-group">
+                    <h3>Variantenname</h3>
+                    <div class="parameter-input">
+                        <input type="text" id="variantName" placeholder="z.B. Standard" style="width: 100%;">
+                    </div>
+                </div>
+            </div>
+            
+            <div style="margin-top: 20px;">
+                <button class="add-variant-btn" onclick="addVariant()">➕ Variante hinzufügen</button>
+                <button class="analyze-btn" onclick="analyzeData()" id="analyzeBtn">🚀 Analyse starten</button>
+            </div>
+            
+            <div class="variants-list" id="variantsList">
+                <h3>Parametervarianten:</h3>
+                <div id="variantsContainer"></div>
+            </div>
+        </div>
+        
+        <div id="chartContainer" style="display: none;">
+            <div class="chart-container">
+                <div id="mainChart" style="height: 800px;"></div>
+            </div>
+            
+            <div class="stats-container" id="statsContainer"></div>
+        </div>
+        
+        <div id="messageContainer"></div>
+    </div>
+
+    <script>
+        // Globale Variablen
+        const API_URL = 'http://localhost:5000';
+        let sessionId = null;
+        let variants = [];
+        let variantColors = [
+            '#FF0000', '#00FF00', '#0080FF', '#FFD700', '#FF00FF',
+            '#00FFFF', '#FFA500', '#FF1493', '#7FFF00', '#9370DB'
+        ];
+        let chartData = null;
+        let analysisResults = null;
+        
+        // Server-Status prüfen
+        async function checkServerStatus() {
+            try {
+                const response = await fetch(`${API_URL}/api/health`);
+                const data = await response.json();
+                
+                const statusEl = document.getElementById('statusText');
+                if (data.status === 'ok') {
+                    statusEl.innerHTML = '🟢 Server Online';
+                    statusEl.className = 'status-online';
+                    
+                    // Module-Status anzeigen
+                    const modules = Object.keys(data.modules).filter(m => data.modules[m]);
+                    console.log('Verfügbare Module:', modules);
+                } else {
+                    statusEl.innerHTML = '🔴 Server Offline';
+                    statusEl.className = 'status-offline';
+                }
+            } catch (error) {
+                document.getElementById('statusText').innerHTML = '🔴 Server nicht erreichbar';
+                document.getElementById('statusText').className = 'status-offline';
+                showMessage('Server nicht erreichbar! Starte erst den Flask-Server mit: python app.py', 'error');
+            }
+        }
+        
+        // Beim Laden prüfen
+        window.onload = function() {
+            checkServerStatus();
+            setInterval(checkServerStatus, 5000); // Alle 5 Sekunden prüfen
+            
+            // Standard-Varianten hinzufügen
+            addDefaultVariants();
+        };
+        
+        // Datei-Upload Handler
+        document.getElementById('fileInput').addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            document.getElementById('fileName').textContent = file.name;
+            showMessage('Lade Datei hoch...', 'loading');
+            
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            try {
+                const response = await fetch(`${API_URL}/api/upload`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    sessionId = data.session_id;
+                    showMessage(`Datei geladen: ${data.rows} Zeilen`, 'success');
+                    console.log('Spalten:', data.columns);
+                } else {
+                    showMessage(data.error || 'Upload fehlgeschlagen', 'error');
+                }
+            } catch (error) {
+                console.error('Upload-Fehler:', error);
+                showMessage('Upload fehlgeschlagen: ' + error.message, 'error');
+            }
+        });
+        
+        // Variante hinzufügen
+        function addVariant() {
+            const name = document.getElementById('variantName').value || `Variante ${variants.length + 1}`;
+            const window = parseInt(document.getElementById('window').value);
+            const candleTol = parseFloat(document.getElementById('candleTol').value);
+            const macdTol = parseFloat(document.getElementById('macdTol').value);
+            
+            const variant = {
+                id: variants.length,
+                name: name,
+                window: window,
+                candleTol: candleTol,
+                macdTol: macdTol,
+                color: variantColors[variants.length % variantColors.length],
+                visible: true
+            };
+            
+            variants.push(variant);
+            updateVariantsList();
+            document.getElementById('variantName').value = '';
+        }
+        
+        // Variantenliste aktualisieren
+        function updateVariantsList() {
+            const container = document.getElementById('variantsContainer');
+            container.innerHTML = '';
+            
+            variants.forEach((variant, index) => {
+                const item = document.createElement('div');
+                item.className = 'variant-item';
+                item.style.borderLeftColor = variant.color;
+                
+                item.innerHTML = `
+                    <div>
+                        <input type="checkbox" class="variant-toggle" 
+                               id="toggle_${variant.id}" 
+                               ${variant.visible ? 'checked' : ''}
+                               onchange="toggleVariant(${variant.id})">
+                        <label for="toggle_${variant.id}">
+                            <strong>${variant.name}</strong> - 
+                            Window: ${variant.window}, 
+                            Candle: ${variant.candleTol}%, 
+                            MACD: ${variant.macdTol}%
+                        </label>
+                    </div>
+                    <button class="remove-variant" onclick="removeVariant(${index})">✕</button>
+                `;
+                
+                container.appendChild(item);
+            });
+        }
+        
+        // Variante entfernen
+        function removeVariant(index) {
+            variants.splice(index, 1);
+            updateVariantsList();
+        }
+        
+        // Variante ein/ausblenden
+        function toggleVariant(id) {
+            const variant = variants.find(v => v.id === id);
+            if (variant) {
+                variant.visible = !variant.visible;
+                if (chartData) updateChart();
+            }
+        }
+        
+        // Hauptanalyse starten
+        async function analyzeData() {
+            if (!sessionId) {
+                showMessage('Bitte erst eine Datei hochladen!', 'error');
+                return;
+            }
+            
+            if (variants.length === 0) {
+                showMessage('Bitte mindestens eine Variante hinzufügen!', 'error');
+                return;
+            }
+            
+            showMessage('Analyse läuft... (Python-Module arbeiten)', 'loading');
+            document.getElementById('analyzeBtn').disabled = true;
+            
+            try {
+                const response = await fetch(`${API_URL}/api/analyze`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session_id: sessionId,
+                        variants: variants
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    chartData = data.chartData;
+                    analysisResults = data.results;
+                    
+                    createChart();
+                    updateStatistics();
+                    
+                    document.getElementById('chartContainer').style.display = 'block';
+                    document.getElementById('messageContainer').innerHTML = '';
+                } else {
+                    showMessage(data.error || 'Analyse fehlgeschlagen', 'error');
+                }
+            } catch (error) {
+                console.error('Analyse-Fehler:', error);
+                showMessage('Analyse fehlgeschlagen: ' + error.message, 'error');
+            } finally {
+                document.getElementById('analyzeBtn').disabled = false;
+            }
+        }
+        
+        // Chart erstellen
+        function createChart() {
+            if (!chartData) return;
+            
+            const traces = [];
+            
+            // Candlestick
+            traces.push({
+                x: chartData.dates,
+                open: chartData.open,
+                high: chartData.high,
+                low: chartData.low,
+                close: chartData.close,
+                type: 'candlestick',
+                name: 'Price',
+                xaxis: 'x',
+                yaxis: 'y'
+            });
+            
+            // RSI
+            traces.push({
+                x: chartData.dates,
+                y: chartData.rsi,
+                type: 'scatter',
+                mode: 'lines',
+                name: 'RSI',
+                line: { color: '#FFA500' },
+                xaxis: 'x',
+                yaxis: 'y2'
+            });
+            
+            // MACD Histogram
+            traces.push({
+                x: chartData.dates,
+                y: chartData.macd_histogram,
+                type: 'bar',
+                name: 'MACD',
+                marker: {
+                    color: chartData.macd_histogram.map(v => v > 0 ? '#00FF00' : '#FF0000')
+                },
+                xaxis: 'x',
+                yaxis: 'y3'
+            });
+            
+            // Divergenz-Markierungen für jede Variante
+            variants.forEach(variant => {
+                if (!variant.visible) return;
+                
+                const results = analysisResults[variant.id];
+                if (!results) return;
+                
+                // Classic Divergences
+                if (results.classic.length > 0) {
+                    traces.push({
+                        x: results.classic.map(d => d.date),
+                        y: results.classic.map(d => d.low),
+                        type: 'scatter',
+                        mode: 'markers',
+                        name: `${variant.name} - Classic`,
+                        marker: {
+                            size: 15,
+                            color: variant.color,
+                            symbol: 'triangle-up',
+                            line: { color: '#FFFFFF', width: 2 }
+                        },
+                        xaxis: 'x',
+                        yaxis: 'y'
+                    });
+                }
+                
+                // Hidden Divergences
+                if (results.hidden.length > 0) {
+                    traces.push({
+                        x: results.hidden.map(d => d.date),
+                        y: results.hidden.map(d => d.low),
+                        type: 'scatter',
+                        mode: 'markers',
+                        name: `${variant.name} - Hidden`,
+                        marker: {
+                            size: 12,
+                            color: variant.color,
+                            symbol: 'diamond',
+                            line: { color: '#FFFFFF', width: 2 }
+                        },
+                        xaxis: 'x',
+                        yaxis: 'y'
+                    });
+                }
+            });
+            
+            const layout = {
+                title: 'Bullish Divergence Analysis (Python Backend)',
+                dragmode: 'zoom',
+                showlegend: true,
+                xaxis: { rangeslider: { visible: false }, domain: [0, 1] },
+                yaxis: { title: 'Price', domain: [0.55, 1] },
+                yaxis2: { title: 'RSI', domain: [0.28, 0.52] },
+                yaxis3: { title: 'MACD', domain: [0, 0.25] },
+                plot_bgcolor: '#1a1a1a',
+                paper_bgcolor: '#0a0a0a',
+                font: { color: '#FFFFFF' }
+            };
+            
+            Plotly.newPlot('mainChart', traces, layout);
+        }
+        
+        // Chart aktualisieren
+        function updateChart() {
+            createChart();
+        }
+        
+        // Statistiken aktualisieren
+        function updateStatistics() {
+            const container = document.getElementById('statsContainer');
+            container.innerHTML = '';
+            
+            const card = document.createElement('div');
+            card.className = 'stats-card';
+            card.innerHTML = '<h3>📊 Ergebnisse</h3>';
+            
+            variants.forEach(variant => {
+                const results = analysisResults[variant.id];
+                if (!results) return;
+                
+                const item = document.createElement('div');
+                item.style.marginBottom = '10px';
+                item.innerHTML = `
+                    <strong style="color: ${variant.color};">${variant.name}:</strong>
+                    Classic: ${results.classic.length}, 
+                    Hidden: ${results.hidden.length}, 
+                    Gesamt: ${results.total}
+                `;
+                card.appendChild(item);
+            });
+            
+            container.appendChild(card);
+        }
+        
+        // Nachricht anzeigen
+        function showMessage(message, type) {
+            const container = document.getElementById('messageContainer');
+            container.innerHTML = `<div class="${type}">${message}</div>`;
+            
+            if (type === 'success') {
+                setTimeout(() => container.innerHTML = '', 3000);
+            }
+        }
+        
+        // Standard-Varianten
+        function addDefaultVariants() {
+            // Standard
+            document.getElementById('variantName').value = 'Standard';
+            document.getElementById('window').value = 5;
+            document.getElementById('candleTol').value = 0.1;
+            document.getElementById('macdTol').value = 3.25;
+            addVariant();
+            
+            // Konservativ
+            document.getElementById('variantName').value = 'Konservativ';
+            document.getElementById('window').value = 7;
+            document.getElementById('candleTol').value = 0.05;
+            document.getElementById('macdTol').value = 2.0;
+            addVariant();
+        }
+    </script>
+</body>
+</html>

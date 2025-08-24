@@ -1,0 +1,699 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <title>Bullish Divergence Analyzer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- Plotly -->
+  <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+  <!-- DuckDB WASM (Parquet im Browser) -->
+  <script type="module" id="duckdb-loader">
+    window.__loadDuckDB = async () => {
+      if (window.__duckdbLoaded) return window.__duckdbLoaded;
+      const mod = await import("https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/dist/duckdb-browser.mjs");
+      const duckdb_wasm = await fetch("https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/dist/duckdb.wasm");
+      const duckdb_worker = new Worker("https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/dist/duckdb-browser.worker.js", { type: "module" });
+      const logger = new mod.ConsoleLogger();
+      const bundles = {
+        mvp: {
+          path: "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/dist/",
+          mainModule: duckdb_wasm,
+          mainWorker: duckdb_worker,
+        }
+      };
+      const db = new mod.AsyncDuckDB(logger, bundles);
+      await db.instantiate(bundles.mvp);
+      const conn = await db.connect();
+      window.__duckdbLoaded = { mod, db, conn };
+      return window.__duckdbLoaded;
+    };
+  </script>
+
+  <style>
+    :root{
+      --bg:#0b0f14;
+      --panel:#0f1620cc;
+      --text:#e6edf3;
+      --muted:#94a3b8;
+      --accent:#60a5fa;
+      --good:#34d399;
+      --bad:#f87171;
+      --shadow:0 10px 30px rgba(0,0,0,.35);
+      --radius:18px;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+      background: radial-gradient(1000px 800px at 10% 0%, #0b1220 0%, #0b0f14 60%, #090c10 100%);
+      color:var(--text);
+    }
+    header{
+      position:sticky; top:0; z-index:9;
+      backdrop-filter: blur(10px);
+      background: #0b0f14cc;
+      border-bottom: 1px solid #1f2937;
+    }
+    .wrap{max-width:1200px;margin:0 auto;padding:18px 16px;}
+    h1{margin:0;font-weight:700;letter-spacing:.3px}
+    .grid{
+      display:grid; gap:16px;
+      grid-template-columns: 1.1fr .9fr;
+    }
+    @media (max-width:1100px){ .grid{grid-template-columns:1fr} }
+    .card{
+      background: var(--panel); border:1px solid #1f2937; border-radius:var(--radius);
+      box-shadow: var(--shadow); padding:16px;
+    }
+    .card h2{margin:0 0 10px 0; font-size:18px}
+    .controls{display:flex; gap:12px; flex-wrap:wrap; align-items:center}
+    input[type="file"]{padding:8px 10px; background:#0b0f14; border:1px dashed #374151; border-radius:12px; color:var(--muted)}
+    button{
+      background: linear-gradient(180deg, #1f2a44, #172036);
+      color:#dbeafe; border:1px solid #334155; padding:10px 14px; border-radius:12px; cursor:pointer;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 6px 16px rgba(0,0,0,.35);
+    }
+    button:hover{filter:brightness(1.05)}
+    table{width:100%; border-collapse:collapse; font-size:14px}
+    th,td{padding:8px 10px; border-bottom:1px solid #233044}
+    th{color:#a5b4fc; text-align:left}
+    .tag{display:inline-flex; align-items:center; gap:6px; padding:4px 8px; border-radius:999px; font-size:12px; border:1px solid #334155; background:#0b0f14}
+    .row{display:flex;gap:10px;flex-wrap:wrap}
+    .row > * {flex:1 1 200px}
+    .legend{display:flex; gap:8px; flex-wrap:wrap}
+    .legend .swatch{width:14px; height:14px; border-radius:4px; border:1px solid #1f2937}
+    .muted{color:var(--muted)}
+    .mono{font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace}
+    .pill{padding:3px 8px; border-radius:999px; background:#192236; border:1px solid #263149; font-size:12px}
+    .notice{font-size:13px; color:#9ca3af}
+    .highlight{background:#182132; border:1px solid #2a3753; padding:8px 10px; border-radius:12px}
+  </style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <div class="row" style="align-items:center">
+      <h1>Bullish Divergence Analyzer</h1>
+      <span class="pill">Dark + Glasmorphismus</span>
+      <span class="pill">Parquet via DuckDB-WASM</span>
+      <span class="pill">Variantenvergleich</span>
+    </div>
+  </div>
+</header>
+
+<main class="wrap" style="display:grid; gap:16px;">
+  <section class="grid">
+    <div class="card">
+      <h2>1) Daten laden</h2>
+      <div class="controls">
+        <input id="fileInput" type="file" multiple accept=".parquet" />
+        <button id="btnLoad">Ausgewählte Dateien einlesen</button>
+        <button id="btnDemo" title="Nur auf Klick werden Demo-Daten verwendet">Demo-Daten laden</button>
+        <span class="notice">Spalten erwartet: <span class="mono">timestamp|date, open, high, low, close, volume</span> (weitere optional).</span>
+      </div>
+      <div style="margin-top:10px">
+        <div id="fileList" class="muted mono"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>2) Varianten verwalten</h2>
+      <div class="controls" style="gap:8px; margin-bottom:8px">
+        <button id="btnAddVariant">Variante hinzufügen</button>
+        <button id="btnResetVariants">Standard / Konservativ / Aggressiv</button>
+        <button id="btnRun">Analyse starten</button>
+        <button id="btnBestPractice">Best-Practice ermitteln</button>
+      </div>
+      <div class="legend" id="variantLegend"></div>
+      <div style="max-height:220px; overflow:auto; margin-top:8px">
+        <table id="variantTable">
+          <thead>
+          <tr>
+            <th>Aktiv</th>
+            <th>Name</th>
+            <th class="mono">lookback</th>
+            <th class="mono">alpha</th>
+            <th class="mono">gamma</th>
+            <th class="mono">rsi_period</th>
+            <th class="mono">macd_fast</th>
+            <th class="mono">macd_slow</th>
+            <th class="mono">macd_signal</th>
+            <th>Farbe</th>
+            <th>Aktion</th>
+          </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>3) Visualisierung</h2>
+    <div id="chart" style="width:100%;height:720px"></div>
+    <div class="notice">Marker: ▲ Classic Bullish Divergence · ◆ Hidden Bullish Divergence (farbcodiert pro Variante)</div>
+  </section>
+
+  <section class="grid">
+    <div class="card">
+      <h2>4) Vergleichstabelle</h2>
+      <div style="max-height:320px; overflow:auto">
+        <table id="summaryTable">
+          <thead>
+          <tr>
+            <th>Variante</th>
+            <th>Classic</th>
+            <th>Hidden</th>
+            <th>Gesamt</th>
+            <th>Frequenz %</th>
+            <th>Ø-Abstand</th>
+            <th>Score</th>
+          </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div id="bestVariant" class="highlight" style="margin-top:10px"></div>
+    </div>
+
+    <div class="card">
+      <h2>5) Parametereinfluss (Korrelation)</h2>
+      <div id="influence" class="mono muted"></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>6) Best-Practice-Indikatoren (Empfehlung)</h2>
+    <div class="notice">Heuristik + lokaler Grid-Scan um eine robuste Standardeinstellung zu empfehlen (Score: Frequenz ↑, Gesamt ↑, Ø-Abstand ↓).</div>
+    <div id="bestPracticePanel" class="mono" style="margin-top:8px"></div>
+  </section>
+
+  <section class="card">
+    <h2>Hinweis</h2>
+    <p class="notice">Standardmäßig werden ausschließlich **ausgewählte Parquet-Dateien** verwendet. Demo-Daten nur auf ausdrücklichen Klick.</p>
+  </section>
+</main>
+
+<script>
+/* ========= Einstellungen & State ========= */
+const COLOR_PALETTE = ["#F87171","#14B8A6","#60A5FA","#34D399","#FBBF24","#A78BFA","#F472B6","#22d3ee","#c084fc","#f59e0b"];
+const SHAPE_CLASSIC = "triangle-up";
+const SHAPE_HIDDEN  = "diamond";
+
+const DEFAULT_VARIANTS = [
+  { active:true,  name:"Standard",    lookback:5, alpha:0.10, gamma:3.25, rsi_period:14, macd_fast:12, macd_slow:26, macd_signal:9,  color:COLOR_PALETTE[2] },
+  { active:true,  name:"Konservativ", lookback:7, alpha:0.12, gamma:4.00, rsi_period:21, macd_fast:10, macd_slow:30, macd_signal:9, color:COLOR_PALETTE[1] },
+  { active:true,  name:"Aggressiv",   lookback:3, alpha:0.08, gamma:2.50, rsi_period:12, macd_fast:8,  macd_slow:21, macd_signal:7,  color:COLOR_PALETTE[0] },
+];
+
+let variants = [];
+let rawSeries = [];  // [{fileName, rows:[{ts, open, high, low, close, volume}], timeframeGuess}]
+let merged = null;   // zusammengeführte Zeitreihe (nur echte Daten oder auf Demo-Klick)
+
+const $  = (sel) => document.querySelector(sel);
+const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+
+/* ========= Varianten UI ========= */
+function renderVariantTable(){
+  const tbody = $("#variantTable tbody");
+  tbody.innerHTML = "";
+  variants.forEach((v, idx) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td><input type="checkbox" ${v.active ? "checked":""} data-k="active"></td>
+      <td><input type="text" value="${v.name}" data-k="name" style="width:120px"></td>
+      <td><input type="number" step="1" min="1" value="${v.lookback}" data-k="lookback" class="mono" style="width:80px"></td>
+      <td><input type="number" step="0.01" value="${v.alpha}" data-k="alpha" class="mono" style="width:80px"></td>
+      <td><input type="number" step="0.01" value="${v.gamma}" data-k="gamma" class="mono" style="width:80px"></td>
+      <td><input type="number" step="1" min="2" value="${v.rsi_period}" data-k="rsi_period" class="mono" style="width:80px"></td>
+      <td><input type="number" step="1" min="2" value="${v.macd_fast}" data-k="macd_fast" class="mono" style="width:80px"></td>
+      <td><input type="number" step="1" min="2" value="${v.macd_slow}" data-k="macd_slow" class="mono" style="width:80px"></td>
+      <td><input type="number" step="1" min="1" value="${v.macd_signal}" data-k="macd_signal" class="mono" style="width:80px"></td>
+      <td><input type="color" value="${v.color}" data-k="color" style="width:42px"></td>
+      <td><button data-action="del">Entfernen</button></td>
+    `;
+    tr.addEventListener("input", (e) => {
+      const k = e.target.dataset.k; if(!k) return;
+      let val = e.target.type==="checkbox" ? e.target.checked : e.target.value;
+      if(["lookback","rsi_period","macd_fast","macd_slow","macd_signal"].includes(k)) val = parseInt(val,10);
+      if(["alpha","gamma"].includes(k)) val = parseFloat(val);
+      variants[idx][k] = val;
+      renderVariantLegend();
+    });
+    tr.querySelector("[data-action='del']").onclick = () => {
+      variants.splice(idx,1); renderVariantTable(); renderVariantLegend();
+    };
+    tbody.appendChild(tr);
+  });
+}
+function renderVariantLegend(){
+  const wrap = $("#variantLegend");
+  wrap.innerHTML = "";
+  variants.forEach(v=>{
+    const item = document.createElement("div");
+    item.className="tag";
+    item.innerHTML = `<span class="swatch" style="background:${v.color}"></span>${v.name}`;
+    wrap.appendChild(item);
+  });
+}
+function ensureVariantsDefault(){
+  variants = JSON.parse(JSON.stringify(DEFAULT_VARIANTS));
+  renderVariantTable(); renderVariantLegend();
+}
+function addVariant(){
+  const used = variants.length % COLOR_PALETTE.length;
+  variants.push({
+    active:true, name:`Variante ${variants.length+1}`,
+    lookback:5, alpha:0.10, gamma:3.25,
+    rsi_period:14, macd_fast:12, macd_slow:26, macd_signal:9,
+    color: COLOR_PALETTE[used]
+  });
+  renderVariantTable(); renderVariantLegend();
+}
+
+/* ========= Parquet lesen (DuckDB) ========= */
+async function loadSelectedFiles(){
+  const files = $("#fileInput").files;
+  $("#fileList").textContent = [...files].map(f=>f.name).join(", ");
+  if(!files || !files.length){ alert("Bitte mindestens eine Parquet-Datei auswählen."); return; }
+
+  rawSeries = [];
+  merged = null; // reset auf echte Daten
+
+  try{
+    const { db, conn } = await window.__loadDuckDB();
+
+    for (const f of files){
+      const buf = new Uint8Array(await f.arrayBuffer());
+      await db.registerFileBuffer(f.name, buf);
+
+      // Dynamische Spalten-Mapping per SELECT-Liste:
+      // Wir versuchen mehrere Namensvarianten robust abzudecken.
+      const q = `
+        SELECT
+          COALESCE(try_cast(date as TIMESTAMP), try_cast(timestamp as TIMESTAMP), try_cast(time as TIMESTAMP)) AS ts,
+          COALESCE("open",  Open,  o,  OPEN)   AS open,
+          COALESCE("high",  High,  h,  HIGH)   AS high,
+          COALESCE("low",   Low,   l,  LOW)    AS low,
+          COALESCE("close", Close, c,  CLOSE)  AS close,
+          COALESCE("volume",Volume,v,VOLUME,0) AS volume
+        FROM read_parquet('${f.name}')
+        ORDER BY ts
+      `;
+      const res = await conn.query(q);
+
+      const rows = [];
+      for (let i=0;i<res.length;i++){
+        const tsRaw = res.getChild(0).get(i);
+        const ts = (tsRaw instanceof Date) ? tsRaw : new Date(tsRaw);
+        rows.push({
+          ts,
+          open: Number(res.getChild(1).get(i)),
+          high: Number(res.getChild(2).get(i)),
+          low : Number(res.getChild(3).get(i)),
+          close:Number(res.getChild(4).get(i)),
+          volume:Number(res.getChild(5).get(i))
+        });
+      }
+      if (!rows.length) throw new Error(`Datei ${f.name} enthält keine lesbaren Reihen.`);
+      rawSeries.push({ fileName:f.name, rows, timeframeGuess: guessTimeframe(rows) });
+    }
+    merged = mergeSeries(rawSeries);
+
+    // Automatisch analysieren & plotten, damit garantiert echte Daten angezeigt werden.
+    runAnalysis();
+
+    toastOK(`Parquet geladen: ${rawSeries.length} Datei(en). Bars gesamt: ${merged.length}`);
+  }catch(err){
+    console.error("Parquet-Laden fehlgeschlagen:", err);
+    alert("Parquet konnte nicht gelesen werden. Details in der Konsole. (Demo-Daten nur auf ausdrücklichen Klick verfügbar.)");
+  }
+}
+
+/* ========= Merge & TF-Guess ========= */
+function guessTimeframe(rows){
+  if(rows.length<2) return "unknown";
+  const dms = rows.slice(1,200).map((r,i,arr)=> rows[i+1].ts - rows[i].ts);
+  const med = dms.sort((a,b)=>a-b)[Math.floor(dms.length/2)];
+  const min = 60*1000, hour = 60*min, day=24*hour;
+  if (Math.abs(med-min) < 5*1000) return "1m";
+  if (Math.abs(med-5*min) < 30*1000) return "5m";
+  if (Math.abs(med-15*min) < 60*1000) return "15m";
+  if (Math.abs(med-hour) < 5*60*1000) return "1h";
+  if (Math.abs(med-4*hour) < 30*60*1000) return "4h";
+  if (Math.abs(med-day) < 2*60*60*1000) return "1D";
+  return `${Math.round(med/60000)}m`;
+}
+function mergeSeries(list){
+  const map = new Map();
+  list.forEach(s=>{
+    s.rows.forEach(r=>{
+      map.set(r.ts.getTime(), r);
+    })
+  });
+  return [...map.values()].sort((a,b)=>a.ts-b.ts);
+}
+
+/* ========= Indikatoren ========= */
+function ema(values, period){
+  const out = new Array(values.length).fill(null);
+  if (values.length===0) return out;
+  const k = 2/(period+1);
+  let prev = null;
+  for (let i=0;i<values.length;i++){
+    const v = values[i];
+    if (v==null){ out[i]=prev; continue; }
+    if (prev==null){
+      if (i < period-1){ out[i]=null; continue; }
+      const slice = values.slice(i-period+1, i+1);
+      const sma = slice.reduce((a,b)=>a+b,0)/period;
+      prev = sma;
+      out[i]=sma;
+    }else{
+      prev = v*k + prev*(1-k);
+      out[i]=prev;
+    }
+  }
+  return out;
+}
+function rsi(closes, period){
+  const out = new Array(closes.length).fill(null);
+  let avgG = 0, avgL = 0;
+  for (let i=1;i<closes.length;i++){
+    const ch = closes[i]-closes[i-1];
+    const g = Math.max(ch,0), l = Math.max(-ch,0);
+    if (i <= period){
+      avgG += g; avgL += l;
+      if (i===period){
+        avgG /= period; avgL /= period;
+        const rs = avgL===0 ? 100 : avgG/avgL;
+        out[i] = 100 - (100/(1+rs));
+      }
+    }else{
+      avgG = (avgG*(period-1)+g)/period;
+      avgL = (avgL*(period-1)+l)/period;
+      const rs = avgL===0 ? 100 : (avgG/avgL);
+      out[i] = 100 - (100/(1+rs));
+    }
+  }
+  return out;
+}
+function macd(closes, fast=12, slow=26, signal=9){
+  const emaFast = ema(closes, fast);
+  const emaSlow = ema(closes, slow);
+  const macdLine = closes.map((_,i)=> (emaFast[i]!=null && emaSlow[i]!=null) ? (emaFast[i]-emaSlow[i]) : null);
+  const signalLine = ema(macdLine.map(x=>x==null?0:x), signal).map((v,i)=> macdLine[i]==null?null:v);
+  const hist = macdLine.map((v,i)=> (v==null||signalLine[i]==null)?null:(v - signalLine[i]));
+  return { macdLine, signalLine, hist };
+}
+
+/* ========= Divergenzen ========= */
+function pivotLows(series, lookback){
+  const out = new Array(series.length).fill(false);
+  for (let i=lookback;i<series.length-lookback;i++){
+    const c = series[i];
+    let ok = true;
+    for (let k=1;k<=lookback;k++){
+      if (!(series[i-k] > c && series[i+k] > c)){ ok=false; break; }
+    }
+    out[i]=ok;
+  }
+  return out;
+}
+function findDivergences(priceClose, indi, lookback, type="classic"){
+  const piv = pivotLows(priceClose, lookback);
+  const events = [];
+  let lastIdx = null;
+  for (let i=0;i<piv.length;i++){
+    if (!piv[i]) continue;
+    if (lastIdx==null){ lastIdx=i; continue; }
+    const i1 = lastIdx, i2 = i;
+    const p1 = priceClose[i1], p2 = priceClose[i2];
+    const ind1 = indi[i1], ind2 = indi[i2];
+    if (ind1==null || ind2==null) { lastIdx=i; continue; }
+    if (type==="classic"){
+      if (p2 < p1 && ind2 > ind1){
+        events.push({ index:i2, i1, i2, p1, p2, ind1, ind2, kind:"classic" });
+      }
+    }else{
+      if (p2 > p1 && ind2 < ind1){
+        events.push({ index:i2, i1, i2, p1, p2, ind1, ind2, kind:"hidden" });
+      }
+    }
+    lastIdx=i;
+  }
+  return events;
+}
+
+/* ========= Tabellen, Score & Einfluss ========= */
+function zNorm(v){ if (v==null || !isFinite(v)) return 0; const s = Math.max(1, Math.abs(v)*0.5 + 1); return (v)/s; }
+function summarizeVariant(lenBars, evClassic, evHidden){
+  const countC = evClassic.length, countH = evHidden.length;
+  const total = countC + countH;
+  const freqPct = lenBars>0 ? (100*total/lenBars) : 0;
+  const spacing = total>1 ? Math.round((evClassic.concat(evHidden).sort((a,b)=>a.index-b.index)
+                          .map((e,i,arr)=> i? (e.index-arr[i-1].index) : null)
+                          .filter(x=>x!=null)
+                          .reduce((a,b)=>a+b,0)) / (total-1)) : null;
+  const score = zNorm(freqPct) + zNorm(total) - zNorm(spacing==null?0:(spacing));
+  return { countC, countH, total, freqPct, spacing, score };
+}
+function buildSummaryTable(rows){
+  const tbody = $("#summaryTable tbody");
+  tbody.innerHTML = "";
+  let best = null;
+  rows.forEach(r=>{
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td><span class="tag" style="border-color:#2b364f;"><span class="swatch" style="background:${r.color}"></span>${r.name}</span></td>
+      <td>${r.countC}</td>
+      <td>${r.countH}</td>
+      <td>${r.total}</td>
+      <td>${r.freqPct.toFixed(2)}</td>
+      <td>${r.spacing ?? "-"}</td>
+      <td>${r.score.toFixed(3)}</td>
+    `;
+    tbody.appendChild(tr);
+    if (!best || r.score>best.score) best = r;
+  });
+  $("#bestVariant").innerHTML = best
+    ? `<b>Beste Variante:</b> <span class="tag"><span class="swatch" style="background:${best.color}"></span>${best.name}</span> · Score=${best.score.toFixed(3)}`
+    : `<span class="muted">Keine aktive Variante.</span>`;
+}
+function paramInfluence(rows){
+  const P = ["lookback","alpha","gamma","rsi_period","macd_fast","macd_slow","macd_signal"];
+  const M = ["total","freqPct","spacing"];
+  const lines = [];
+  for (const m of M){
+    lines.push(`• ${m}`);
+    for (const p of P){
+      const xs = rows.map(r=>Number(r[p])); const ys = rows.map(r=>Number(r[m] ?? 0));
+      const r = corrPearson(xs, ys);
+      lines.push(`   ${p.padEnd(12)}: ${r.toFixed(3)}`);
+    }
+  }
+  $("#influence").textContent = lines.join("\n");
+}
+function corrPearson(x, y){
+  const n = Math.min(x.length, y.length);
+  if (n<3) return 0;
+  const mx = x.reduce((a,b)=>a+b,0)/n, my = y.reduce((a,b)=>a+b,0)/n;
+  let num=0, dx=0, dy=0;
+  for (let i=0;i<n;i++){
+    const ax = x[i]-mx, ay = y[i]-my;
+    num += ax*ay; dx += ax*ax; dy += ay*ay;
+  }
+  return (dx===0 || dy===0) ? 0 : (num/Math.sqrt(dx*dy));
+}
+
+/* ========= Plot (fixe Domains → nichts abgeschnitten) ========= */
+function plotAll(data, results){
+  const ts = data.map(d=>d.ts);
+  const o = data.map(d=>d.open), h = data.map(d=>d.high), l = data.map(d=>d.low), c = data.map(d=>d.close);
+
+  // EMAs
+  const ema20  = ema(c,20), ema50 = ema(c,50), ema100 = ema(c,100), ema200 = ema(c,200);
+
+  const traces = [];
+
+  // 1) Preis / Candles (oberes Panel)
+  traces.push({
+    type:"candlestick", x:ts, open:o, high:h, low:l, close:c, name:"Price",
+    increasing: {line:{color:"#22c55e"}}, decreasing:{line:{color:"#ef4444"}},
+    xaxis:"x", yaxis:"y", hoverinfo:"x+y"
+  });
+  const addMA = (arr, name, color) => {
+    traces.push({ x:ts, y:arr, mode:"lines", name, line:{width:1.6, color}, xaxis:"x", yaxis:"y", hoverinfo:"x+y+name" });
+  };
+  addMA(ema20,  "EMA20",  "#38bdf8");
+  addMA(ema50,  "EMA50",  "#fbbf24");
+  addMA(ema100, "EMA100", "#a78bfa");
+  addMA(ema200, "EMA200", "#34d399");
+
+  // 2) RSI (mittleres Panel)
+  const ref = results.find(r=>r.active);
+  if (ref){
+    traces.push({ x:ts, y:ref.rsi, name:`RSI(${ref.rsi_period})`, mode:"lines", line:{width:1}, xaxis:"x", yaxis:"y2", hoverinfo:"x+y+name" });
+  }
+
+  // 3) MACD Histogram (unteres Panel)
+  if (ref){
+    traces.push({ x:ts, y:ref.macd_hist, name:`MACD Hist (${ref.macd_fast}/${ref.macd_slow}/${ref.macd_signal})`, type:"bar", marker:{opacity:0.6}, xaxis:"x", yaxis:"y3", hoverinfo:"x+y+name" });
+  }
+
+  // Marker je Variante (auf Preis-Achse)
+  results.forEach(r=>{
+    if (!r.active) return;
+    const addScatter = (arr, shape, label, color) => {
+      traces.push({
+        x: arr.map(e=>ts[e.index]), y: arr.map(e=>c[e.index]),
+        mode:"markers", name:`${r.name} ${label}`,
+        marker:{symbol:shape, size:10, color, line:{color:"#0b0f14", width:1}},
+        text: arr.map(e=> hoverText(r, e)), hovertemplate: "%{text}<extra></extra>",
+        xaxis:"x", yaxis:"y"
+      });
+    };
+    addScatter(r.eventsClassic, SHAPE_CLASSIC, "Classic ▲", r.color);
+    addScatter(r.eventsHidden,  SHAPE_HIDDEN,  "Hidden ◆",  r.color);
+  });
+
+  const layout = {
+    dragmode:"zoom",
+    hovermode:"x unified",
+    plot_bgcolor:"#0b0f14",
+    paper_bgcolor:"#0b0f14",
+    font:{color:"#cbd5e1"},
+    // feste Domains → nichts überlappt/abgeschnitten
+    xaxis:{domain:[0,1], anchor:"y", rangeslider:{visible:false}, gridcolor:"#1f2937"},
+    yaxis:{title:"Preis", domain:[0.52,1.0], gridcolor:"#1f2937", automargin:true},
+    yaxis2:{title:"RSI",  domain:[0.28,0.50], gridcolor:"#1f2937", automargin:true, rangemode:"tozero"},
+    yaxis3:{title:"MACD", domain:[0.04,0.26], gridcolor:"#1f2937", automargin:true, zeroline:true},
+    legend:{orientation:"h", y:1.08, x:0, bgcolor:"#0b0f14aa", bordercolor:"#1f2937", borderwidth:1},
+    margin:{l:60,r:20,t:40,b:30}
+  };
+  Plotly.newPlot("chart", traces, layout, {responsive:true, displaylogo:false}).then(() => {
+    // Nach dem Rendern nochmals sicherstellen, dass nichts clipped.
+    window.requestAnimationFrame(()=> Plotly.Plots.resize("chart"));
+  });
+}
+
+function hoverText(r, e){
+  return [
+    `<b>${r.name}</b> • ${e.kind.toUpperCase()}`,
+    `Index: ${e.index}`,
+    `Preis: ${e.p2?.toFixed?.(2) ?? "-"}`,
+    `RSI: ${(r.rsi[e.index]??null)?.toFixed?.(2) ?? "-"}`,
+    `MACD hist: ${(r.macd_hist[e.index]??null)?.toFixed?.(4) ?? "-"}`,
+    `Params: lb=${r.lookback}, α=${r.alpha}, γ=${r.gamma}, RSI=${r.rsi_period}, MACD=${r.macd_fast}/${r.macd_slow}/${r.macd_signal}`
+  ].join("<br>")
+}
+
+/* ========= Best-Practice Heuristik ========= */
+function bestPracticeRecommend(data){
+  const gridRSI = [12,14,16,18,21];
+  const gridMACD = [[8,21,7],[10,30,9],[12,26,9],[14,28,9],[16,32,9]];
+  const lb = [3,5,7], al=[0.08,0.10,0.12], ga=[2.5,3.25,4.0];
+
+  let best = null, checked = 0;
+  const close = data.map(d=>d.close);
+
+  for (const rsiP of gridRSI){
+    const rsiArr = rsi(close, rsiP);
+    for (const [mf,ms,sg] of gridMACD){
+      const { hist } = macd(close, mf, ms, sg);
+      for (const l of lb) for (const a of al) for (const g of ga){
+        const evC = findDivergences(close, rsiArr, l, "classic");
+        const evH = findDivergences(close, rsiArr, l, "hidden");
+        const sum = summarizeVariant(data.length, evC, evH);
+        const candidate = { lookback:l, alpha:a, gamma:g, rsi_period:rsiP, macd_fast:mf, macd_slow:ms, macd_signal:sg, score:sum.score, total:sum.total, freqPct:sum.freqPct, spacing:sum.spacing };
+        if (!best || candidate.score>best.score) best=candidate;
+        checked++;
+      }
+    }
+  }
+  return { ...best, checked };
+}
+function renderBestPracticePanel(bp){
+  if (!bp){
+    $("#bestPracticePanel").innerHTML = `<span class="muted">Noch nicht berechnet.</span>`;
+    return;
+  }
+  $("#bestPracticePanel").innerHTML = `
+    <div>• geprüfte Kombinationen: ${bp.checked}</div>
+    <div>• Empfehlung:
+      <span class="tag">RSI=${bp.rsi_period}</span>
+      <span class="tag">MACD=${bp.macd_fast}/${bp.macd_slow}/${bp.macd_signal}</span>
+      <span class="tag">lookback=${bp.lookback}</span>
+      <span class="tag">α=${bp.alpha}</span>
+      <span class="tag">γ=${bp.gamma}</span>
+    </div>
+    <div>• erwartete Kennzahlen: total=${bp.total}, freq%=${bp.freqPct.toFixed(2)}, Ø-Abstand=${bp.spacing ?? "-"}, Score=${bp.score.toFixed(3)}</div>
+  `;
+}
+
+/* ========= Orchestrierung ========= */
+function runAnalysis(){
+  if (!merged || !merged.length){ toastERR("Keine Daten geladen."); return; }
+  const close = merged.map(d=>d.close);
+  const active = variants.filter(v=>v.active);
+  if (!active.length){ toastERR("Keine aktive Variante."); return; }
+
+  const results = active.map(v=>{
+    const rsiArr = rsi(close, v.rsi_period);
+    const { hist } = macd(close, v.macd_fast, v.macd_slow, v.macd_signal);
+    const evClassic = findDivergences(close, rsiArr, v.lookback, "classic");
+    const evHidden  = findDivergences(close, rsiArr, v.lookback, "hidden");
+    const sum = summarizeVariant(merged.length, evClassic, evHidden);
+    return {
+      ...v, active:true,
+      rsi: rsiArr, macd_hist: hist,
+      eventsClassic: evClassic,
+      eventsHidden: evHidden,
+      ...sum
+    };
+  });
+
+  buildSummaryTable(results);
+  paramInfluence(results);
+  plotAll(merged, results);
+}
+
+function toastOK(msg){ console.log("[OK]", msg); }
+function toastERR(msg){ console.warn("[WARN]", msg); }
+
+/* ========= Demo-Daten (nur auf Klick) ========= */
+function makeTestData(){
+  const n=800, start = Date.now()- (n*24*3600*1000);
+  let price=20000, arr=[];
+  for (let i=0;i<n;i++){
+    const ts = new Date(start + i*24*3600*1000);
+    const rnd = (Math.sin(i/37)*30) + (Math.cos(i/11)*20) + (Math.random()-0.5)*25;
+    const close = Math.max(2000, price + rnd);
+    const high = Math.max(close, close + Math.random()*20);
+    const low  = Math.min(close, close - Math.random()*20);
+    const open = (arr.length?arr[arr.length-1].close:close) + (Math.random()-0.5)*10;
+    arr.push({ts, open, high, low, close, volume: Math.random()*1000});
+    price = close;
+  }
+  return arr;
+}
+
+/* ========= Events ========= */
+$("#btnLoad").onclick = loadSelectedFiles;
+$("#btnDemo").onclick = () => { merged = makeTestData(); runAnalysis(); };
+$("#btnAddVariant").onclick = addVariant;
+$("#btnResetVariants").onclick = () => { ensureVariantsDefault(); };
+$("#btnRun").onclick = runAnalysis;
+$("#btnBestPractice").onclick = () => {
+  if (!merged){ toastERR("Bitte Daten laden."); return; }
+  const bp = bestPracticeRecommend(merged);
+  renderBestPracticePanel(bp);
+};
+
+ensureVariantsDefault();
+// WICHTIG: KEIN automatisches Laden von Demo-Daten!
+// -> Nur echte Parquet-Daten (oder Demo-Button auf Wunsch).
+renderBestPracticePanel(null);
+</script>
+</body>
+</html>

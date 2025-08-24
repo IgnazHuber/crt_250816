@@ -112,7 +112,9 @@ function addVariant() {
         macdTol: macdTol,
         color: presetColors[name.toLowerCase()] || colors[variants.length % colors.length],
         showClassic: true,
-        showHidden: true
+        showHidden: true,
+        showBullish: true,
+        showBearish: true
     };
     
     variants.push(variant);
@@ -135,10 +137,76 @@ function updateVariantsList() {
         div.innerHTML = `
             <span style="color: ${variant.color}; font-weight: bold;">${variant.name}</span>
             <span>W:${variant.window} C:${variant.candleTol}% M:${variant.macdTol}%</span>
-            <button class="btn btn-danger" onclick="removeVariant(${index})">Remove</button>
+            <div style="margin-left: 10px;">
+                <label><input type="checkbox" id="classic_${index}" ${variant.showClassic ? 'checked' : ''} onchange="toggleVariantType(${index}, 'classic')"> Classic</label>
+                <label><input type="checkbox" id="hidden_${index}" ${variant.showHidden ? 'checked' : ''} onchange="toggleVariantType(${index}, 'hidden')"> Hidden</label>
+                <label><input type="checkbox" id="bullish_${index}" ${variant.showBullish ? 'checked' : ''} onchange="toggleVariantType(${index}, 'bullish')"> <span style="color: #00FF00;">Bullish</span></label>
+                <label><input type="checkbox" id="bearish_${index}" ${variant.showBearish ? 'checked' : ''} onchange="toggleVariantType(${index}, 'bearish')"> <span style="color: #FF0000;">Bearish</span></label>
+            </div>
+            <button class="btn btn-danger" onclick="removeVariant(${index})" style="margin-left: 10px;">Remove</button>
         `;
         container.appendChild(div);
     });
+}
+
+function toggleVariantType(index, type) {
+    if (index < variants.length) {
+        switch(type) {
+            case 'classic':
+                variants[index].showClassic = document.getElementById(`classic_${index}`).checked;
+                break;
+            case 'hidden':
+                variants[index].showHidden = document.getElementById(`hidden_${index}`).checked;
+                break;
+            case 'bullish':
+                variants[index].showBullish = document.getElementById(`bullish_${index}`).checked;
+                break;
+            case 'bearish':
+                variants[index].showBearish = document.getElementById(`bearish_${index}`).checked;
+                break;
+        }
+        
+        // Update chart visibility without replotting
+        if (window.currentResults && sessionId) {
+            updateChartVisibility();
+        }
+    }
+}
+
+function updateChartVisibility() {
+    if (!window.currentResults) return;
+    
+    // Instead of replotting, update visibility of traces
+    const chartDiv = document.getElementById('mainChart');
+    if (chartDiv && chartDiv.data) {
+        const visibilityUpdates = [];
+        const traceNames = chartDiv.data.map(trace => trace.name);
+        
+        // Determine which traces should be visible
+        traceNames.forEach((name, index) => {
+            let shouldShow = true;
+            
+            // Check if this trace belongs to a variant with specific settings
+            for (let variant of variants) {
+                if (name.includes(variant.name)) {
+                    if (name.includes('Classic') && !variant.showClassic) shouldShow = false;
+                    if (name.includes('Hidden') && !variant.showHidden) shouldShow = false;
+                    if (name.includes('Bullish') && !variant.showBullish) shouldShow = false;
+                    if (name.includes('Bearish') && !variant.showBearish) shouldShow = false;
+                    break;
+                }
+            }
+            
+            visibilityUpdates.push(shouldShow ? true : 'legendonly');
+        });
+        
+        // Update trace visibility without replotting
+        Plotly.restyle(chartDiv, { visible: visibilityUpdates });
+        return;
+    }
+    
+    // Fallback to replotting if restyle fails
+    plotChart(window.currentChartData, window.currentResults);
 }
 
 function removeVariant(index) {
@@ -170,6 +238,11 @@ async function analyze() {
         
         if (data.success) {
             console.log("Analysis completed:", data);
+            // Show results panel
+            document.getElementById('resultsPanel').style.display = 'block';
+            // Store current data for toggle functionality
+            window.currentChartData = data.chartData;
+            window.currentResults = data.results;
             plotChart(data.chartData, data.results);
             showMessage('messageContainer', 'Analysis complete', 'success');
         } else {
@@ -284,124 +357,514 @@ function plotChart(chartData, results) {
         });
     }
 
-    // Add divergence markers for each variant
-    variants.forEach(variant => {
+    // Add divergence markers and arrows for each variant
+    let globalDivCount = 0;
+    const divergenceDetails = [];
+    const legendEntries = new Set(); // Track legend entries to avoid duplicates
+    let firstVariantDivergences = null; // Track first variant divergences for comparison
+    
+    variants.forEach((variant, variantIndex) => {
         const res = results[variant.id];
         if (!res) return;
         
         const legendgroup = `variant_${variant.id}`;
+        const bullishColor = '#00FF00';  // Green for bullish
+        const bearishColor = '#FF0000';  // Red for bearish
         
-        // Classic markers
-        if (variant.showClassic && res.classic.length > 0) {
-            traces.push({
-                x: res.classic.map(d => d.date),
-                y: res.classic.map(d => d.low),
-                mode: 'markers',
-                type: 'scatter',
-                name: `${variant.name} Classic`,
-                marker: {
-                    size: 12,
-                    color: variant.color,
-                    symbol: 'triangle-up',
-                    line: { color: '#FFFFFF', width: 2 }
-                },
-                xaxis: 'x',
-                yaxis: 'y',
-                legendgroup: legendgroup,
-                showlegend: true
-            });
-            traces.push({
-                x: res.classic.map(d => d.date),
-                y: res.classic.map(d => d.rsi),
-                mode: 'markers',
-                type: 'scatter',
-                name: `${variant.name} RSI`,
-                marker: {
-                    size: 8,
-                    color: variant.color,
-                    symbol: 'circle'
-                },
-                xaxis: 'x',
-                yaxis: 'y2',
-                legendgroup: legendgroup,
-                showlegend: false
-            });
-            traces.push({
-                x: res.classic.map(d => d.date),
-                y: res.classic.map(d => d.macd),
-                mode: 'markers',
-                type: 'scatter',
-                name: `${variant.name} MACD`,
-                marker: {
-                    size: 8,
-                    color: variant.color,
-                    symbol: 'square'
-                },
-                xaxis: 'x',
-                yaxis: 'y3',
-                legendgroup: legendgroup,
-                showlegend: false
-            });
+        // Process all divergences (classic + hidden) together for numbering
+        const allDivergences = [
+            ...res.classic.map(d => ({...d, divType: 'classic'})),
+            ...res.hidden.map(d => ({...d, divType: 'hidden'}))
+        ].sort((a, b) => new Date(a.date) - new Date(b.date));
+        
+        // Store first variant divergences for comparison
+        if (variantIndex === 0) {
+            firstVariantDivergences = allDivergences.map(d => d.date);
         }
         
-        // Hidden markers
-        if (variant.showHidden && res.hidden.length > 0) {
+        allDivergences.forEach(div => {
+            globalDivCount++;
+            div.globalId = globalDivCount;
+            
+            // Determine if bullish or bearish
+            const isBullish = div.type === 'classic' ? true : div.macd > 0;
+            const divName = `${div.divType === 'classic' ? 'Classic' : 'Hidden'} ${isBullish ? 'Bullish' : 'Bearish'}`;
+            
+            // Check if this divergence should be shown based on toggle settings
+            const showType = (div.divType === 'classic' && variant.showClassic) || 
+                           (div.divType === 'hidden' && variant.showHidden);
+            const showDirection = (isBullish && variant.showBullish) || 
+                                (!isBullish && variant.showBearish);
+            
+            if (!showType || !showDirection) {
+                return; // Skip this divergence
+            }
+            
+            // Store details for table
+            divergenceDetails.push({
+                id: globalDivCount,
+                variant: variant.name,
+                type: divName,
+                date: div.date,
+                price: div.low,
+                rsi: div.rsi,
+                macd: div.macd,
+                strength: div.strength,
+                trigger: `${div.divType} divergence detected with window=${div.window}, RSI=${div.rsi.toFixed(2)}, MACD=${div.macd.toFixed(4)}`
+            });
+            
+            // Track this legend entry
+            const legendKey = `${variant.name}_${divName}`;
+            const shouldShowLegend = !legendEntries.has(legendKey);
+            if (shouldShowLegend) {
+                legendEntries.add(legendKey);
+            }
+            
+            // Add main marker without text
             traces.push({
-                x: res.hidden.map(d => d.date),
-                y: res.hidden.map(d => d.low),
+                x: [div.date],
+                y: [div.low],
                 mode: 'markers',
                 type: 'scatter',
-                name: `${variant.name} Hidden`,
+                name: `${variant.name} ${divName}`,
                 marker: {
-                    size: 10,
+                    size: 14,
                     color: variant.color,
-                    symbol: 'diamond',
-                    line: { color: '#FFFFFF', width: 2 }
+                    symbol: div.divType === 'classic' ? 'triangle-up' : 'diamond',
+                    line: { color: '#808080', width: 1 }
                 },
                 xaxis: 'x',
                 yaxis: 'y',
-                legendgroup: legendgroup,
-                showlegend: true
+                legendgroup: `${variant.name}_${div.divType}_${isBullish ? 'bullish' : 'bearish'}`,
+                showlegend: shouldShowLegend,
+                hovertemplate: `<b>${divName}</b><br>` +
+                              `Date: %{x}<br>` +
+                              `Price: %{y:.4f}<br>` +
+                              `RSI: ${div.rsi.toFixed(2)}<br>` +
+                              `MACD: ${div.macd.toFixed(4)}<br>` +
+                              `Strength: ${div.strength.toFixed(2)}<br>` +
+                              `<extra></extra>`
             });
+            
+            // Add highlighting circle for variant differences
+            if (div.is_new === true && variantIndex > 0) {
+                // Yellow circle for new markers not in first variant
+                traces.push({
+                    x: [div.date],
+                    y: [div.low],
+                    mode: 'markers',
+                    type: 'scatter',
+                    name: 'New in Variant',
+                    marker: {
+                        size: 24,
+                        color: 'rgba(255, 255, 0, 0.3)',
+                        symbol: 'circle',
+                        line: { color: '#FFFF00', width: 2 }
+                    },
+                    xaxis: 'x',
+                    yaxis: 'y',
+                    legendgroup: `${variant.name}_${div.divType}_${isBullish ? 'bullish' : 'bearish'}`,
+                    showlegend: false,
+                    hoverinfo: 'skip'
+                });
+            }
+            
+            // Add marker number positioned to avoid overlap
+            // Use staggered positioning based on marker count
+            const positions = ['bottom right', 'middle right', 'top right'];
+            const numberPosition = positions[globalDivCount % 3];
+            
             traces.push({
-                x: res.hidden.map(d => d.date),
-                y: res.hidden.map(d => d.rsi),
+                x: [div.date],
+                y: [div.low],
+                mode: 'text',
+                type: 'scatter',
+                name: `${variant.name} ${divName} Number`,
+                text: [globalDivCount],
+                textposition: numberPosition,
+                textfont: { color: variant.color, size: 12, family: 'Arial Bold' },
+                xaxis: 'x',
+                yaxis: 'y',
+                legendgroup: `${variant.name}_${div.divType}_${isBullish ? 'bullish' : 'bearish'}`,
+                showlegend: false,
+                hoverinfo: 'skip'
+            });
+            
+            // Add RSI marker with same shape/size as candlestick
+            traces.push({
+                x: [div.date],
+                y: [div.rsi],
                 mode: 'markers',
                 type: 'scatter',
-                name: `${variant.name} Hidden RSI`,
+                name: `${variant.name} ${divName} RSI`,
                 marker: {
-                    size: 6,
+                    size: 14,
                     color: variant.color,
-                    symbol: 'diamond'
+                    symbol: div.divType === 'classic' ? 'triangle-up' : 'diamond',
+                    line: { color: '#808080', width: 1 }
                 },
                 xaxis: 'x',
                 yaxis: 'y2',
-                legendgroup: legendgroup,
+                legendgroup: `${variant.name}_${div.divType}_${isBullish ? 'bullish' : 'bearish'}`,
                 showlegend: false
             });
+            
+            // Add RSI highlighting circle for variant differences
+            if (div.is_new === true && variantIndex > 0) {
+                traces.push({
+                    x: [div.date],
+                    y: [div.rsi],
+                    mode: 'markers',
+                    type: 'scatter',
+                    name: 'New in Variant RSI',
+                    marker: {
+                        size: 24,
+                        color: 'rgba(255, 255, 0, 0.3)',
+                        symbol: 'circle',
+                        line: { color: '#FFFF00', width: 2 }
+                    },
+                    xaxis: 'x',
+                    yaxis: 'y2',
+                    legendgroup: `${variant.name}_${div.divType}_${isBullish ? 'bullish' : 'bearish'}`,
+                    showlegend: false,
+                    hoverinfo: 'skip'
+                });
+            }
+            
+            // Add RSI number with staggering
+            const rsiRange = Math.max(...chartData.rsi.filter(x => x)) - Math.min(...chartData.rsi.filter(x => x));
+            const rsiOffset = rsiRange * 0.008 * (globalDivCount % 3);
             traces.push({
-                x: res.hidden.map(d => d.date),
-                y: res.hidden.map(d => d.macd),
+                x: [div.date],
+                y: [div.rsi - 3 - rsiOffset],
+                mode: 'text',
+                type: 'scatter',
+                name: `${variant.name} ${divName} RSI Number`,
+                text: [globalDivCount],
+                textposition: 'middle center',
+                textfont: { color: variant.color, size: 12, family: 'Arial Bold' },
+                xaxis: 'x',
+                yaxis: 'y2',
+                legendgroup: `${variant.name}_${div.divType}_${isBullish ? 'bullish' : 'bearish'}`,
+                showlegend: false,
+                hoverinfo: 'skip'
+            });
+            
+            // Add RSI spray line
+            traces.push({
+                x: [div.date, div.date],
+                y: [div.rsi, div.rsi - 2 - rsiOffset],
+                mode: 'lines',
+                type: 'scatter',
+                name: `${variant.name} ${divName} RSI Line`,
+                line: { color: variant.color, width: 1, dash: 'dot' },
+                xaxis: 'x',
+                yaxis: 'y2',
+                legendgroup: `${variant.name}_${div.divType}_${isBullish ? 'bullish' : 'bearish'}`,
+                showlegend: false,
+                hoverinfo: 'skip'
+            });
+            
+            // Add MACD marker with same shape/size as candlestick
+            traces.push({
+                x: [div.date],
+                y: [div.macd],
                 mode: 'markers',
                 type: 'scatter',
-                name: `${variant.name} Hidden MACD`,
+                name: `${variant.name} ${divName} MACD`,
                 marker: {
-                    size: 6,
+                    size: 14,
                     color: variant.color,
-                    symbol: 'diamond'
+                    symbol: div.divType === 'classic' ? 'triangle-up' : 'diamond',
+                    line: { color: '#808080', width: 1 }
                 },
                 xaxis: 'x',
                 yaxis: 'y3',
-                legendgroup: legendgroup,
+                legendgroup: `${variant.name}_${div.divType}_${isBullish ? 'bullish' : 'bearish'}`,
                 showlegend: false
             });
+            
+            // Add MACD highlighting circle for variant differences
+            if (div.is_new === true && variantIndex > 0) {
+                traces.push({
+                    x: [div.date],
+                    y: [div.macd],
+                    mode: 'markers',
+                    type: 'scatter',
+                    name: 'New in Variant MACD',
+                    marker: {
+                        size: 24,
+                        color: 'rgba(255, 255, 0, 0.3)',
+                        symbol: 'circle',
+                        line: { color: '#FFFF00', width: 2 }
+                    },
+                    xaxis: 'x',
+                    yaxis: 'y3',
+                    legendgroup: `${variant.name}_${div.divType}_${isBullish ? 'bullish' : 'bearish'}`,
+                    showlegend: false,
+                    hoverinfo: 'skip'
+                });
+            }
+            
+            // Add MACD number with staggering
+            const macdRange = Math.max(...chartData.macd_histogram.filter(x => x)) - Math.min(...chartData.macd_histogram.filter(x => x));
+            const macdOffset = macdRange * 0.008 * (globalDivCount % 3);
+            const macdNumberY = div.macd < 0 ? div.macd + 0.002 + macdOffset : div.macd - 0.002 - macdOffset;
+            traces.push({
+                x: [div.date],
+                y: [macdNumberY],
+                mode: 'text',
+                type: 'scatter',
+                name: `${variant.name} ${divName} MACD Number`,
+                text: [globalDivCount],
+                textposition: 'middle center',
+                textfont: { color: variant.color, size: 12, family: 'Arial Bold' },
+                xaxis: 'x',
+                yaxis: 'y3',
+                legendgroup: `${variant.name}_${div.divType}_${isBullish ? 'bullish' : 'bearish'}`,
+                showlegend: false,
+                hoverinfo: 'skip'
+            });
+            
+            // Add MACD spray line
+            traces.push({
+                x: [div.date, div.date],
+                y: [div.macd, macdNumberY],
+                mode: 'lines',
+                type: 'scatter',
+                name: `${variant.name} ${divName} MACD Line`,
+                line: { color: variant.color, width: 1, dash: 'dot' },
+                xaxis: 'x',
+                yaxis: 'y3',
+                legendgroup: `${variant.name}_${div.divType}_${isBullish ? 'bullish' : 'bearish'}`,
+                showlegend: false,
+                hoverinfo: 'skip'
+            });
+            
+            // Add divergence arrows and names
+            const dateIndex = chartData.dates.indexOf(div.date);
+            if (dateIndex > variant.window) {
+                // Create trend lines showing divergence pattern
+                const startIndex = Math.max(0, dateIndex - variant.window);
+                const endIndex = dateIndex;
+                
+                // Create curved arrows for Price plot
+                const midIndex = Math.floor((startIndex + endIndex) / 2);
+                const priceStart = chartData.low[startIndex];
+                const priceMid = (chartData.low[midIndex] + chartData.low[startIndex] + div.low) / 3;
+                const curvature = (priceStart - div.low) * 0.5; // Increased curvature
+                
+                traces.push({
+                    x: [chartData.dates[startIndex], chartData.dates[midIndex], chartData.dates[endIndex]],
+                    y: [priceStart, priceMid + curvature, div.low],
+                    mode: 'lines',
+                    type: 'scatter',
+                    name: `${variant.name} ${divName} Trend`,
+                    line: { color: variant.color, width: 3, dash: 'dash', shape: 'spline' },
+                    xaxis: 'x',
+                    yaxis: 'y',
+                    legendgroup: `${variant.name}_${div.divType}_${isBullish ? 'bullish' : 'bearish'}`,
+                    showlegend: false,
+                    hoverinfo: 'skip'
+                });
+                
+                // Add divergence name annotation to Price plot - positioned to avoid overlap
+                const namePositions = ['top left', 'middle left', 'bottom left'];
+                const namePosition = namePositions[globalDivCount % 3];
+                
+                traces.push({
+                    x: [div.date],
+                    y: [div.low],
+                    mode: 'text',
+                    type: 'scatter',
+                    name: `${variant.name} ${divName} Label`,
+                    text: [divName],
+                    textposition: namePosition,
+                    textfont: { color: variant.color, size: 12, family: 'Arial Bold' },
+                    xaxis: 'x',
+                    yaxis: 'y',
+                    legendgroup: `${variant.name}_${div.divType}_${isBullish ? 'bullish' : 'bearish'}`,
+                    showlegend: false,
+                    hoverinfo: 'skip'
+                });
+                
+                // Create curved arrows for RSI plot
+                const rsiStart = chartData.rsi[startIndex];
+                const rsiMid = (chartData.rsi[midIndex] + rsiStart + div.rsi) / 3;
+                const rsiCurvature = (rsiStart - div.rsi) * 0.5;
+                
+                traces.push({
+                    x: [chartData.dates[startIndex], chartData.dates[midIndex], chartData.dates[endIndex]],
+                    y: [rsiStart, rsiMid + rsiCurvature, div.rsi],
+                    mode: 'lines',
+                    type: 'scatter',
+                    name: `${variant.name} ${divName} RSI Trend`,
+                    line: { color: variant.color, width: 2, dash: 'dash', shape: 'spline' },
+                    xaxis: 'x',
+                    yaxis: 'y2',
+                    legendgroup: `${variant.name}_${div.divType}_${isBullish ? 'bullish' : 'bearish'}`,
+                    showlegend: false,
+                    hoverinfo: 'skip'
+                });
+                
+                // Add divergence name annotation to RSI plot
+                traces.push({
+                    x: [div.date],
+                    y: [div.rsi - 6 - rsiOffset],
+                    mode: 'text',
+                    type: 'scatter',
+                    name: `${variant.name} ${divName} RSI Label`,
+                    text: [divName],
+                    textposition: 'bottom center',
+                    textfont: { color: variant.color, size: 12, family: 'Arial Bold' },
+                    xaxis: 'x',
+                    yaxis: 'y2',
+                    legendgroup: `${variant.name}_${div.divType}_${isBullish ? 'bullish' : 'bearish'}`,
+                    showlegend: false,
+                    hoverinfo: 'skip'
+                });
+                
+                // Create curved arrows for MACD plot
+                const macdStart = chartData.macd_histogram[startIndex];
+                const macdMid = (chartData.macd_histogram[midIndex] + macdStart + div.macd) / 3;
+                const macdCurvature = (macdStart - div.macd) * 0.5;
+                
+                traces.push({
+                    x: [chartData.dates[startIndex], chartData.dates[midIndex], chartData.dates[endIndex]],
+                    y: [macdStart, macdMid + macdCurvature, div.macd],
+                    mode: 'lines',
+                    type: 'scatter',
+                    name: `${variant.name} ${divName} MACD Trend`,
+                    line: { color: variant.color, width: 2, dash: 'dash', shape: 'spline' },
+                    xaxis: 'x',
+                    yaxis: 'y3',
+                    legendgroup: `${variant.name}_${div.divType}_${isBullish ? 'bullish' : 'bearish'}`,
+                    showlegend: false,
+                    hoverinfo: 'skip'
+                });
+                
+                // Add divergence name annotation to MACD plot
+                traces.push({
+                    x: [div.date],
+                    y: [div.macd < 0 ? div.macd + 0.004 + macdOffset : div.macd - 0.004 - macdOffset],
+                    mode: 'text',
+                    type: 'scatter',
+                    name: `${variant.name} ${divName} MACD Label`,
+                    text: [divName],
+                    textposition: 'bottom center',
+                    textfont: { color: variant.color, size: 12, family: 'Arial Bold' },
+                    xaxis: 'x',
+                    yaxis: 'y3',
+                    legendgroup: `${variant.name}_${div.divType}_${isBullish ? 'bullish' : 'bearish'}`,
+                    showlegend: false,
+                    hoverinfo: 'skip'
+                });
+            }
+        });
+        
+        // Add blue highlighting for missing markers (exist in first variant but not current)
+        if (variantIndex > 0 && firstVariantDivergences) {
+            const currentVariantDates = allDivergences.map(d => d.date);
+            const missingDates = firstVariantDivergences.filter(date => !currentVariantDates.includes(date));
+            
+            missingDates.forEach(missingDate => {
+                // Find the closest price and indicators for this date
+                const dateIndex = chartData.dates.indexOf(missingDate);
+                if (dateIndex >= 0) {
+                    const price = chartData.low[dateIndex];
+                    const rsi = chartData.rsi[dateIndex];
+                    const macd = chartData.macd_histogram[dateIndex];
+                    
+                    // Add blue circle to candlestick plot
+                    traces.push({
+                        x: [missingDate],
+                        y: [price],
+                        mode: 'markers',
+                        type: 'scatter',
+                        name: 'Missing in Variant',
+                        marker: {
+                            size: 24,
+                            color: 'rgba(0, 0, 255, 0.3)',
+                            symbol: 'circle',
+                            line: { color: '#0000FF', width: 2 }
+                        },
+                        xaxis: 'x',
+                        yaxis: 'y',
+                        legendgroup: `variant_${variant.id}`,
+                        showlegend: false,
+                        hoverinfo: 'skip'
+                    });
+                    
+                    // Add blue circle to RSI plot
+                    traces.push({
+                        x: [missingDate],
+                        y: [rsi],
+                        mode: 'markers',
+                        type: 'scatter',
+                        name: 'Missing in Variant RSI',
+                        marker: {
+                            size: 24,
+                            color: 'rgba(0, 0, 255, 0.3)',
+                            symbol: 'circle',
+                            line: { color: '#0000FF', width: 2 }
+                        },
+                        xaxis: 'x',
+                        yaxis: 'y2',
+                        legendgroup: `variant_${variant.id}`,
+                        showlegend: false,
+                        hoverinfo: 'skip'
+                    });
+                    
+                    // Add blue circle to MACD plot
+                    traces.push({
+                        x: [missingDate],
+                        y: [macd],
+                        mode: 'markers',
+                        type: 'scatter',
+                        name: 'Missing in Variant MACD',
+                        marker: {
+                            size: 24,
+                            color: 'rgba(0, 0, 255, 0.3)',
+                            symbol: 'circle',
+                            line: { color: '#0000FF', width: 2 }
+                        },
+                        xaxis: 'x',
+                        yaxis: 'y3',
+                        legendgroup: `variant_${variant.id}`,
+                        showlegend: false,
+                        hoverinfo: 'skip'
+                    });
+                }
+            });
+        }
+    });
+    
+    // Store divergence details globally for table display
+    window.divergenceDetails = divergenceDetails;
+
+    // Create results summary for text box with per-variant breakdown
+    let resultsSummary = `<b>Divergence Summary</b><br>`;
+    resultsSummary += `<b>Total: ${globalDivCount}</b><br><br>`;
+    
+    variants.forEach(variant => {
+        const variantDivs = divergenceDetails.filter(d => d.variant === variant.name);
+        if (variantDivs.length > 0) {
+            const bullish = variantDivs.filter(d => d.type.includes('Bullish')).length;
+            const bearish = variantDivs.filter(d => d.type.includes('Bearish')).length;
+            const classic = variantDivs.filter(d => d.type.includes('Classic')).length;
+            const hidden = variantDivs.filter(d => d.type.includes('Hidden')).length;
+            
+            resultsSummary += `<b style="color: ${variant.color};">${variant.name}: ${variantDivs.length}</b><br>`;
+            resultsSummary += `  <span style="color: #00FF00;">▲${bullish}</span> `;
+            resultsSummary += `<span style="color: #FF0000;">▼${bearish}</span> `;
+            resultsSummary += `C:${classic} H:${hidden}<br>`;
         }
     });
 
     const layout = {
         title: {
             text: 'Bullish Divergence Analysis',
-            font: { size: 20, color: '#FFFFFF' }
+            font: { size: 8, color: '#FFFFFF' }
         },
         xaxis: {
             rangeslider: { visible: false },
@@ -409,15 +872,15 @@ function plotChart(chartData, results) {
             anchor: 'y3',
             gridcolor: 'rgba(255,255,255,0.1)',
             zerolinecolor: 'rgba(255,255,255,0.2)',
-            titlefont: { color: '#FFFFFF' },
-            tickfont: { color: '#FFFFFF' }
+            titlefont: { color: '#FFFFFF', size: 8 },
+            tickfont: { color: '#FFFFFF', size: 8 }
         },
         yaxis: {
             title: 'Price',
             domain: [0.55, 1],
             gridcolor: 'rgba(255,255,255,0.1)',
-            titlefont: { color: '#FFFFFF' },
-            tickfont: { color: '#FFFFFF' },
+            titlefont: { color: '#FFFFFF', size: 8 },
+            tickfont: { color: '#FFFFFF', size: 8 },
             fixedrange: false
         },
         yaxis2: {
@@ -425,8 +888,8 @@ function plotChart(chartData, results) {
             domain: [0.28, 0.52],
             anchor: 'x',
             gridcolor: 'rgba(255,255,255,0.1)',
-            titlefont: { color: '#FFFFFF' },
-            tickfont: { color: '#FFFFFF' },
+            titlefont: { color: '#FFFFFF', size: 8 },
+            tickfont: { color: '#FFFFFF', size: 8 },
             fixedrange: false
         },
         yaxis3: {
@@ -434,8 +897,8 @@ function plotChart(chartData, results) {
             domain: [0, 0.25],
             anchor: 'x',
             gridcolor: 'rgba(255,255,255,0.1)',
-            titlefont: { color: '#FFFFFF' },
-            tickfont: { color: '#FFFFFF' },
+            titlefont: { color: '#FFFFFF', size: 8 },
+            tickfont: { color: '#FFFFFF', size: 8 },
             fixedrange: false
         },
         plot_bgcolor: '#0a0a0a',
@@ -450,7 +913,23 @@ function plotChart(chartData, results) {
             font: { color: '#FFFFFF', size: 10 }
         },
         hovermode: 'x unified',
-        height: Math.max(600, window.innerHeight - 200)
+        height: Math.max(600, window.innerHeight - 200),
+        annotations: [
+            {
+                text: resultsSummary,
+                showarrow: false,
+                xref: 'paper',
+                yref: 'paper',
+                x: 0.02,
+                y: 0.85, // Moved down to avoid legend overlap
+                xanchor: 'left',
+                yanchor: 'top',
+                bgcolor: 'rgba(0,0,0,0.8)',
+                bordercolor: 'rgba(255,255,255,0.2)',
+                borderwidth: 1,
+                font: { color: '#FFFFFF', size: 10 }
+            }
+        ]
     };
 
     const config = {
@@ -473,20 +952,59 @@ function plotChart(chartData, results) {
 function updateStats(results) {
     console.log("Updating stats with results:", results);
     const container = document.getElementById('statsContainer');
-    let html = '<div class="stats-card"><h3>Results</h3><table style="width: 100%; border-collapse: collapse;">';
-    html += '<tr style="border-bottom: 2px solid rgba(255,255,255,0.2);"><th style="text-align: left; padding: 5px; font-size: 12px;">Variant</th><th style="text-align: center; padding: 5px; font-size: 12px;">Classic</th><th style="text-align: center; padding: 5px; font-size: 12px;">Hidden</th><th style="text-align: center; padding: 5px; font-size: 12px;">Total</th></tr>';
+    
+    // Create two-row layout: summary on top, detailed list below
+    let html = '<div style="display: flex; flex-direction: column; gap: 20px;">';
+    
+    // Summary table
+    html += '<div class="stats-card"><h3>📊 Summary Results</h3><table style="width: 100%; border-collapse: collapse;">';
+    html += '<tr style="border-bottom: 2px solid rgba(255,255,255,0.2);"><th style="text-align: left; padding: 8px; font-size: 13px;">Variant</th><th style="text-align: center; padding: 8px; font-size: 13px;">Classic</th><th style="text-align: center; padding: 8px; font-size: 13px;">Hidden</th><th style="text-align: center; padding: 8px; font-size: 13px;">Total</th></tr>';
 
     variants.forEach(v => {
         const res = results[v.id] || { classic: [], hidden: [], total: 0 };
         html += `<tr style="border-bottom: 1px solid rgba(255,255,255,0.1);">
-            <td style="padding: 5px; color: ${v.color}; font-weight: bold; font-size: 12px;">${v.name.charAt(0).toUpperCase() + v.name.slice(1)}</td>
-            <td style="text-align: center; padding: 5px; font-size: 12px;">${res.classic.length}</td>
-            <td style="text-align: center; padding: 5px; font-size: 12px;">${res.hidden.length}</td>
-            <td style="text-align: center; padding: 5px; font-weight: bold; font-size: 12px;">${res.total}</td>
+            <td style="padding: 8px; color: ${v.color}; font-weight: bold; font-size: 13px;">${v.name.charAt(0).toUpperCase() + v.name.slice(1)}</td>
+            <td style="text-align: center; padding: 8px; font-size: 13px;">${res.classic.length}</td>
+            <td style="text-align: center; padding: 8px; font-size: 13px;">${res.hidden.length}</td>
+            <td style="text-align: center; padding: 8px; font-weight: bold; font-size: 13px;">${res.total}</td>
         </tr>`;
     });
 
     html += '</table></div>';
+    
+    // Detailed divergence table below summary
+    if (window.divergenceDetails && window.divergenceDetails.length > 0) {
+        html += '<div class="stats-card"><h3>🔍 Detailed Divergence List</h3>';
+        html += '<table style="width: 100%; border-collapse: collapse; font-size: 11px;">';
+        html += '<tr style="border-bottom: 2px solid rgba(255,255,255,0.2);">';
+        html += '<th style="text-align: center; padding: 6px;">#</th>';
+        html += '<th style="text-align: left; padding: 6px;">Variant</th>';
+        html += '<th style="text-align: left; padding: 6px;">Type</th>';
+        html += '<th style="text-align: left; padding: 6px;">Date</th>';
+        html += '<th style="text-align: right; padding: 6px;">Price</th>';
+        html += '<th style="text-align: right; padding: 6px;">RSI</th>';
+        html += '<th style="text-align: right; padding: 6px;">MACD</th>';
+        html += '<th style="text-align: left; padding: 6px;">Trigger Reason</th>';
+        html += '</tr>';
+        
+        window.divergenceDetails.forEach(div => {
+            const colorStyle = div.type.includes('Bullish') ? 'color: #00FF00;' : 'color: #FF0000;';
+            html += `<tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                <td style="text-align: center; padding: 6px; font-weight: bold; ${colorStyle}">${div.id}</td>
+                <td style="padding: 6px;">${div.variant}</td>
+                <td style="padding: 6px; ${colorStyle} font-weight: bold;">${div.type}</td>
+                <td style="padding: 6px;">${div.date}</td>
+                <td style="text-align: right; padding: 6px;">${div.price.toFixed(4)}</td>
+                <td style="text-align: right; padding: 6px;">${div.rsi.toFixed(2)}</td>
+                <td style="text-align: right; padding: 6px;">${div.macd.toFixed(4)}</td>
+                <td style="padding: 6px; font-size: 10px; color: #aaa;">${div.trigger}</td>
+            </tr>`;
+        });
+        
+        html += '</table></div>';
+    }
+    
+    html += '</div>'; // Close the flex container
     container.innerHTML = html;
 }
 
@@ -507,5 +1025,74 @@ function loadPreset(type) {
             document.getElementById('candleTol').value = 0.1;
             document.getElementById('macdTol').value = 3.25;
             break;
+        case 'conservative':
+            document.getElementById('window').value = 7;
+            document.getElementById('candleTol').value = 0.05;
+            document.getElementById('macdTol').value = 2.0;
+            break;
+        case 'aggressive':
+            document.getElementById('window').value = 3;
+            document.getElementById('candleTol').value = 0.15;
+            document.getElementById('macdTol').value = 5.0;
+            break;
     }
+}
+
+function saveConfig() {
+    const config = {
+        variants: variants,
+        sessionId: sessionId
+    };
+    const blob = new Blob([JSON.stringify(config, null, 2)], {type: 'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'bullish_config.json';
+    a.click();
+    URL.revokeObjectURL(url);
+    showMessage('messageContainer', 'Configuration saved', 'success');
+}
+
+function loadConfig() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.onchange = function(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+        
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            try {
+                const config = JSON.parse(e.target.result);
+                variants = config.variants || [];
+                variantIdCounter = Math.max(...variants.map(v => v.id), 0) + 1;
+                updateVariantsList();
+                showMessage('messageContainer', 'Configuration loaded', 'success');
+            } catch (error) {
+                showMessage('messageContainer', 'Invalid configuration file', 'error');
+            }
+        };
+        reader.readAsText(file);
+    };
+    input.click();
+}
+
+function exportResults(format) {
+    showMessage('messageContainer', `Export to ${format.toUpperCase()} - Feature coming soon`, 'loading');
+}
+
+function toggleFullscreen() {
+    const chartDiv = document.getElementById('mainChart');
+    if (!document.fullscreenElement) {
+        chartDiv.requestFullscreen().catch(err => {
+            showMessage('messageContainer', 'Fullscreen not supported', 'error');
+        });
+    } else {
+        document.exitFullscreen();
+    }
+}
+
+function closeValidation() {
+    document.getElementById('validationPanel').style.display = 'none';
 }

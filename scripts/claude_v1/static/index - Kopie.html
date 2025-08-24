@@ -71,7 +71,7 @@
             
             <div class="action-buttons">
                 <button class="btn btn-success" onclick="addVariant()">➕ Variante hinzufügen</button>
-                <button class="btn btn-primary" onclick="analyze()" id="analyzeBtn" disabled>
+                <button class="btn btn-primary" onclick="runAnalysis()" id="analyzeBtn">
                     🚀 Analyse starten
                 </button>
                 <button class="btn btn-secondary" onclick="saveConfig()">💾 Konfig speichern</button>
@@ -81,7 +81,7 @@
             <!-- Variants List -->
             <div class="variants-section">
                 <h4>Parametervarianten:</h4>
-                <div id="variants"></div>
+                <div id="variantsList"></div>
             </div>
         </div>
 
@@ -91,10 +91,9 @@
             
             <!-- Legend -->
             <div class="legend-info">
-                <span class="legend-item">▲ Classic Divergence (Preis vs. RSI)</span>
-                <span class="legend-item">◆ Hidden Divergence (Preis vs. MACD)</span>
+                <span class="legend-item">▲ Classic Divergence</span>
+                <span class="legend-item">◆ Hidden Divergence</span>
                 <span class="legend-item">⬆️ Zusätzlich zur Basis</span>
-                <span class="legend-item">🔍 Klick auf Marker für Details</span>
             </div>
             
             <!-- Export Buttons -->
@@ -109,17 +108,6 @@
             
             <!-- Statistics -->
             <div id="statsContainer" class="stats-container"></div>
-        </div>
-
-        <!-- Validation Panel -->
-        <div class="panel" id="validationPanel" style="display: none;">
-            <div class="validation-panel-header">
-                <h3>🔍 Divergenz-Validierung</h3>
-                <button onclick="closeValidation()" class="btn btn-danger">✕ Schließen</button>
-            </div>
-            <div id="validationContent" class="validation-content">
-                <!-- Validierungsdetails werden hier eingefügt -->
-            </div>
         </div>
 
         <!-- Messages -->

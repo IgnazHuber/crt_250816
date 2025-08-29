@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bullish Divergence Analyzer 2.0</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.27.0/plotly.min.js"></script>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+
+        <!-- Status Bar -->
+        <div class="status-bar">
+            <span id="serverStatus" class="status-indicator">⚡ Verbindung prüfen...</span>
+            <span id="dataStatus" class="status-indicator"></span>
+        </div>
+
+        <!-- File Upload Panel -->
+        <div class="panel">
+            <h3>📁 Daten laden</h3>
+            <div class="file-controls">
+                <label for="fileInput" class="file-label">
+                    📂 CSV/Parquet auswählen
+                </label>
+                <input type="file" id="fileInput" accept=".csv,.parquet">
+                <span id="fileName" class="file-name"></span>
+                <button id="clearData" class="btn btn-danger" style="display:none;">
+                    🗑️ Daten löschen
+                </button>
+            </div>
+            <div id="uploadMsg"></div>
+        </div>
+
+        <!-- Parameter Panel -->
+        <div class="panel">
+            <h3>⚙️ Parameter & Varianten</h3>
+            
+            <!-- Compact Parameter Row -->
+            <div class="compact-params">
+                <div class="param-inline">
+                    <label>Window:</label>
+                    <input type="number" id="window" value="5" min="1" max="20" style="width:50px;">
+                </div>
+                <div class="param-inline">
+                    <label>Candle%:</label>
+                    <input type="number" id="candleTol" value="0.1" step="0.01" style="width:60px;">
+                </div>
+                <div class="param-inline">
+                    <label>MACD%:</label>
+                    <input type="number" id="macdTol" value="3.25" step="0.01" style="width:60px;">
+                </div>
+                <div class="param-inline">
+                    <label>Name:</label>
+                    <select id="variantName" style="width:80px;">
+                        <option value="Standard">Standard</option>
+                        <option value="v1">v1</option>
+                        <option value="v2">v2</option>
+                        <option value="v3">v3</option>
+                        <option value="v4">v4</option>
+                        <option value="v5">v5</option>
+                    </select>
+                </div>
+                <div class="param-inline">
+                    <label>SL%:</label>
+                    <input type="number" id="stopLoss" value="5" min="1" max="50" step="0.1" style="width:50px;">
+                </div>
+                <div class="param-inline">
+                    <label>TP%:</label>
+                    <input type="number" id="takeProfit" value="25" min="5" max="200" step="1" style="width:50px;">
+                </div>
+                <div class="param-inline">
+                    <label>Risk%:</label>
+                    <input type="number" id="positionSize" value="100" min="1" max="100" step="1" style="width:50px;" title="% of capital per trade">
+                </div>
+                <div class="param-inline">
+                    <label><input type="checkbox" id="enableTrading" checked> Trading</label>
+                </div>
+            </div>
+            
+            <!-- Plot Styling Parameters -->
+            <div class="compact-params" style="margin-top: 4px;">
+                <div class="param-inline">
+                    <label>Text Size:</label>
+                    <input type="number" id="textSize" value="10" min="6" max="20" step="1" style="width:50px;" title="Text size in plots">
+                </div>
+                <div class="param-inline">
+                    <label>Line Width:</label>
+                    <input type="number" id="lineWidth" value="1.5" min="0.5" max="5" step="0.1" style="width:50px;" title="Line width in plots">
+                </div>
+                <div class="param-inline">
+                    <label>Num Pos:</label>
+                    <input type="number" id="numberPosition" value="4" min="1" max="10" step="0.5" style="width:50px;" title="Number position offset %">
+                </div>
+                <div class="param-inline">
+                    <label>Name Pos:</label>
+                    <input type="number" id="namePosition" value="6" min="2" max="15" step="0.5" style="width:50px;" title="Name position offset %">
+                </div>
+                <div class="param-inline">
+                    <label>Success Pos:</label>
+                    <input type="number" id="successPosition" value="8" min="3" max="20" step="0.5" style="width:50px;" title="Success position offset %">
+                </div>
+                <div class="param-inline" style="margin-top: 8px;">
+                    <button class="btn btn-secondary" onclick="refreshStyles()" title="Apply current styling settings to all existing variants">
+                        🎨 Refresh Styles
+                    </button>
+                </div>
+            </div>
+            
+            <!-- Trading Date Range -->
+            <div class="compact-params" id="tradingDateRange" style="display:none; margin-top: 4px;">
+                <div class="param-inline">
+                    <label>Start Date:</label>
+                    <input type="date" id="tradingStartDate" style="width:120px;">
+                </div>
+                <div class="param-inline">
+                    <label>End Date:</label>
+                    <input type="date" id="tradingEndDate" style="width:120px;">
+                </div>
+                <div class="param-inline">
+                    <label>Data Period:</label>
+                    <span id="dataTimeFrame" style="color: #64ffda; font-weight: bold;">-</span>
+                </div>
+            </div>
+            
+            <!-- Single Button Row -->
+            <div class="compact-controls">
+                <div class="control-row">
+                    <button onclick="loadPreset('standard')" class="btn btn-preset">Std</button>
+                    <button onclick="loadPreset('conservative')" class="btn btn-preset">Kon</button>
+                    <button onclick="loadPreset('aggressive')" class="btn btn-preset">Agr</button>
+                    <button class="btn btn-success" onclick="addVariant()">➕ Add</button>
+                    <button class="btn btn-primary" onclick="analyze()" id="analyzeBtn" disabled>🚀 Analyze</button>
+                    <button class="btn btn-secondary" onclick="saveConfig()">💾 Save</button>
+                    <button class="btn btn-secondary" onclick="loadConfig()">📂 Load</button>
+                </div>
+            </div>
+            
+            <!-- Variants List -->
+            <div class="variants-section">
+                <h4>Varianten:</h4>
+                <div id="variants"></div>
+            </div>
+        </div>
+
+        <!-- Results Panel -->
+        <div class="panel" id="resultsPanel" style="display: none;">
+            <h3>📊 Analyseergebnisse</h3>
+            
+            <!-- Legend -->
+            <div class="legend-info">
+                <span class="legend-item">▲ Classic Divergence (Preis vs. RSI)</span>
+                <span class="legend-item">◆ Hidden Divergence (Preis vs. MACD)</span>
+                <span class="legend-item">⬆️ Zusätzlich zur Basis</span>
+                <span class="legend-item">🔍 Klick auf Marker für Details</span>
+            </div>
+            
+            <!-- Export Buttons -->
+            <div class="export-buttons">
+                <button onclick="exportResults('json')" class="btn btn-export">📄 JSON Export</button>
+                <button onclick="exportResults('csv')" class="btn btn-export">📊 CSV Export</button>
+                <button onclick="toggleFullscreen()" class="btn btn-export">🔍 Vollbild</button>
+            </div>
+            
+            <!-- Chart -->
+            <div id="mainChart"></div>
+            
+            <!-- Statistics -->
+            <div id="statsContainer" class="stats-container"></div>
+        </div>
+
+        <!-- Validation Panel -->
+        <div class="panel" id="validationPanel" style="display: none;">
+            <div class="validation-panel-header">
+                <h3>🔍 Divergenz-Validierung</h3>
+                <button onclick="closeValidation()" class="btn btn-danger">✕ Schließen</button>
+            </div>
+            <div id="validationContent" class="validation-content">
+                <!-- Validierungsdetails werden hier eingefügt -->
+            </div>
+        </div>
+
+        <!-- Messages -->
+        <div id="messageContainer"></div>
+    </div>
+
+    <!-- JavaScript -->
+    <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,14 +1,16 @@
 # Mainframe_RTv250829_mplfinance.py
-# Vollständige Version (nur Korrekturen/Erweiterungen):
-# - Legendengruppierung exakt gemäß Spezifikation
-# - CBullDivg_x2 immer sichtbar (Proxy-Eintrag)
-# - Marker-Counts Box für alle vorhandenen Varianten
-# - DOE erzeugt zusätzlich ein interaktives Heatmap-Plot (HTML)
+# Vollständige Version – NUR Ergänzungen/Korrekturen:
+# - Legendengruppierung exakt (V1/V2 → Typ → Richtung, Classic/Hidden zusammen)
+# - Zählerbox pro Variante
+# - DOE: Standard = NUR 2×2-Facet-HTML mit allen 4 Typen (Zellen-Text = Classic + Hidden)
+#        Optional per Flags: Gesamt-Heatmap & Einzelseiten
 
 import os
 import glob
 import subprocess
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
+import time
 
 import numpy as np
 import pandas as pd
@@ -29,11 +31,145 @@ from HBearDivg_analysis_vectorized import HBearDivg_analysis
 from HBullDivg_analysis_vectorized import HBullDivg_analysis
 from Initialize_RSI_EMA_MACD import Initialize_RSI_EMA_MACD
 from Local_Maximas_Minimas import Local_Max_Min
+from Backtest_Divergences import (
+    BacktestParams,
+    prompt_params as backtest_prompt_params,
+    backtest as run_backtest,
+    export_backtest_xlsx,
+)
+
+
+# -------------------------------------------------
+# Backtest-Zeitraum Auswahl (PowerShell Calendar mit Fallback)
+# -------------------------------------------------
+def select_backtest_timespan(df):
+    """Return (start_dt, end_dt) for backtest. Uses Windows Forms calendar; fallback to console.
+    Defaults to full span if cancelled/empty.
+    """
+    if 'date' not in df.columns:
+        return None, None
+    min_dt = pd.to_datetime(df['date']).min()
+    max_dt = pd.to_datetime(df['date']).max()
+    print(f"Available data range: {min_dt} to {max_dt}")
+
+    # detect if intraday (has times or sub-daily interval)
+    intraday = False
+    try:
+        times = pd.to_datetime(df['date'])
+        if any(getattr(ts, 'hour', 0) != 0 or getattr(ts, 'minute', 0) != 0 for ts in times.head(100)):
+            intraday = True
+        else:
+            dt_diffs = times.sort_values().diff().dropna()
+            if not dt_diffs.empty and dt_diffs.min() < pd.Timedelta(days=1):
+                intraday = True
+    except Exception:
+        pass
+
+    # Try PowerShell date picker dialog
+    try:
+        ps = r'''
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+$form = New-Object System.Windows.Forms.Form
+$form.Text = "Select Backtest Date Range"
+$form.Size = New-Object System.Drawing.Size(400,220)
+$form.StartPosition = "CenterScreen"
+
+$lbl1 = New-Object System.Windows.Forms.Label
+$lbl1.Text = "Start date:"; $lbl1.Location = New-Object System.Drawing.Point(20,20); $lbl1.AutoSize = $true
+$dp1 = New-Object System.Windows.Forms.DateTimePicker
+$dp1.Format = [System.Windows.Forms.DateTimePickerFormat]::Short
+$dp1.Location = New-Object System.Drawing.Point(120,16)
+
+$lbl2 = New-Object System.Windows.Forms.Label
+$lbl2.Text = "End date:"; $lbl2.Location = New-Object System.Drawing.Point(20,60); $lbl2.AutoSize = $true
+$dp2 = New-Object System.Windows.Forms.DateTimePicker
+$dp2.Format = [System.Windows.Forms.DateTimePickerFormat]::Short
+$dp2.Location = New-Object System.Drawing.Point(120,56)
+
+$ok = New-Object System.Windows.Forms.Button
+$ok.Text = "OK"; $ok.Location = New-Object System.Drawing.Point(120,110)
+$cancel = New-Object System.Windows.Forms.Button
+$cancel.Text = "Cancel"; $cancel.Location = New-Object System.Drawing.Point(200,110)
+$def = New-Object System.Windows.Forms.Button
+$def.Text = "Default"; $def.Location = New-Object System.Drawing.Point(280,110)
+
+$form.Controls.AddRange(@($lbl1,$dp1,$lbl2,$dp2,$ok,$cancel,$def))
+
+$start=[datetime]::Parse("''' + str(pd.to_datetime(pd.to_datetime(min_dt).date())) + '''")
+$end=[datetime]::Parse("''' + str(pd.to_datetime(pd.to_datetime(max_dt).date())) + '''")
+$dp1.Value = $start; $dp2.Value = $end
+
+$form.Tag = "DEFAULT"
+$ok.Add_Click({ $form.Tag = "OK"; $form.Close() })
+$cancel.Add_Click({ $form.Tag = "CANCEL"; $form.Close() })
+$def.Add_Click({ $form.Tag = "DEFAULT"; $form.Close() })
+
+$form.Topmost = $true
+$form.Add_Shown({ $form.Activate() })
+[void]$form.ShowDialog()
+
+function ToUnix($dt){
+  $dto = [System.DateTimeOffset]$dt
+  return $dto.ToUniversalTime().ToUnixTimeSeconds()
+}
+$mode = $form.Tag
+if ($mode -eq "OK") { Write-Output ("OK|{0}|{1}" -f (ToUnix $dp1.Value), (ToUnix $dp2.Value)) }
+elseif ($mode -eq "DEFAULT") { Write-Output ("DEFAULT|{0}|{1}" -f (ToUnix $start), (ToUnix $end)) }
+else { Write-Output ("DEFAULT|{0}|{1}" -f (ToUnix $start), (ToUnix $end)) }
+'''
+        # If intraday, switch to date+time format by injecting CustomFormat
+        if intraday:
+            ps = ps.replace('[System.Windows.Forms.DateTimePickerFormat]::Short', '[System.Windows.Forms.DateTimePickerFormat]::Custom')
+            ps = ps.replace('$dp1.Location', '$dp1.CustomFormat = "yyyy-MM-dd HH:mm"; $dp1.ShowUpDown = $true; $dp1.Location')
+            ps = ps.replace('$dp2.Location', '$dp2.CustomFormat = "yyyy-MM-dd HH:mm"; $dp2.ShowUpDown = $true; $dp2.Location')
+
+        result = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
+                                capture_output=True, text=True, timeout=60)
+        if result.returncode == 0 and result.stdout:
+            s = result.stdout.strip()
+            if os.getenv('BT_DEBUG_TS'):
+                print(f"[DEBUG] Date picker raw output: {s}")
+            if "|" in s:
+                parts = s.split("|")
+                if len(parts) == 3:
+                    mode, a, b = parts
+                else:
+                    mode, a, b = "", parts[0], parts[1]
+                # parse epoch seconds robustly
+                try:
+                    s_dt = pd.to_datetime(int(float(a)), unit='s', utc=True)
+                    e_dt = pd.to_datetime(int(float(b)), unit='s', utc=True)
+                except Exception:
+                    s_dt = pd.to_datetime(a, utc=True, errors='coerce')
+                    e_dt = pd.to_datetime(b, utc=True, errors='coerce')
+                # clamp to available range
+                if pd.notna(s_dt) and s_dt < min_dt:
+                    s_dt = pd.to_datetime(min_dt, utc=True)
+                if pd.notna(e_dt) and e_dt > max_dt:
+                    e_dt = pd.to_datetime(max_dt, utc=True)
+                if pd.notna(s_dt) and pd.notna(e_dt):
+                    # if mode explicitly DEFAULT, return full span
+                    if str(mode).upper() == 'DEFAULT':
+                        return pd.to_datetime(min_dt, utc=True), pd.to_datetime(max_dt, utc=True)
+                    if os.getenv('BT_DEBUG_TS'):
+                        print(f"[DEBUG] Parsed picker: mode={mode}, start={s_dt}, end={e_dt}")
+                    return s_dt, e_dt
+    except Exception:
+        pass
+
+    # If dialog failed or user canceled without output -> use full span by default
+    return pd.to_datetime(min_dt, utc=True), pd.to_datetime(max_dt, utc=True)
 
 
 # -------------------------------------------------
 # Datei-Auswahl (PowerShell Dialog mit Fallback)
 # -------------------------------------------------
+# Standard-Default-Datei für Input
+DEFAULT_INPUT_FILE = r"C:\Projekte\crt_250816\data\raw\btc_1day_candlesticks_all.csv"
+
+
 def get_input_file():
     """PowerShell-OpenFileDialog; Fallback: Konsole."""
     try:
@@ -52,13 +188,14 @@ if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Outpu
         path = (result.stdout or "").strip()
         if result.returncode == 0 and path:
             return path
+        # Nichts gewählt -> Standard verwenden
+        return DEFAULT_INPUT_FILE
     except Exception:
-        pass
-    return get_input_file_console()
+        return DEFAULT_INPUT_FILE
 
 
 def get_input_file_console():
-    default_file = r"C:\Projekte\crt_250816\data\raw\btc_1day_candlesticks_all.csv"
+    default_file = DEFAULT_INPUT_FILE
     print(f"\nDefault file: {default_file}")
     print("Press Enter to use default, or choose from available files:")
 
@@ -138,7 +275,7 @@ def get_analysis_type():
     import sys
     if len(sys.argv) > 1:
         c = (sys.argv[1] or "").lower().strip()
-        if c in list("abcdef"):
+        if c in list("abcdefg"):
             return c
 
     try:
@@ -149,11 +286,13 @@ def get_analysis_type():
         print("d: HBullDivg_analysis (Hidden Bullish Divergence)")
         print("e: All analyses (a-d)")
         print("f: DOE (Design of Experiments)")
+        print("g: Backtest markers (validate signals)")
+        print("h: Backtest DOE markers (combine doe_markers_*.csv)")
         while True:
-            c = input("\nEnter your choice (a-f): ").lower().strip()
-            if c in list("abcdef"):
+            c = input("\nEnter your choice (a-h): ").lower().strip()
+            if c in list("abcdefgh"):
                 return c
-            print("Invalid choice. Please enter a, b, c, d, e, or f.")
+            print("Invalid choice. Please enter a, b, c, d, e, f, g, or h.")
     except (EOFError, KeyboardInterrupt):
         return "e"
 
@@ -285,11 +424,7 @@ def _safe_get_vals(df_idx, dt):
 def add_markers_to_plotly(fig, df, analysis_results, variant_name):
     """
     Zeichnet Marker in 3 Subplots (Price/RSI/MACD).
-    Legendengruppierung exakt wie gefordert:
-      - legendgroup = f"{variant}|{div_type}|{direction}"
-      - Pro Gruppe EIN sichtbarer Legenden-Eintrag (Proxy-Trace, visible='legendonly')
-      - Classic/Hidden-Traces: showlegend=False, gleiche legendgroup
-      - Proxy-Einträge werden UNABHÄNGIG von gefundenen Events erzeugt (sichert Legenden-Präsenz)
+    Legendengruppierung wie gefordert (Classic/Hidden gemeinsam).
     Rückgabe: Set aus (date, y_price) zur Varianten-Differenz.
     """
     positions = set()
@@ -309,7 +444,6 @@ def add_markers_to_plotly(fig, df, analysis_results, variant_name):
 
     def _add_proxy_legend_entry(div_type, direction):
         gid = _group_id(div_type, direction)
-        # Proxy immer hinzufügen (einmalig pro Gruppe), damit Legende existiert
         fig.add_trace(
             go.Scatter(
                 x=[df['date'].iloc[0] if len(df) else None],
@@ -330,7 +464,7 @@ def add_markers_to_plotly(fig, df, analysis_results, variant_name):
             row=1, col=1
         )
 
-    # Proxy-Gruppen für alle aktivierten Analysen anlegen (auch ohne Events)
+    # Proxy-Gruppen anlegen (Sichtbarkeit in Legende sichern)
     if analysis_results.get('CBullDivg', False):
         _add_proxy_legend_entry('CBullDivg', 'Bullish')
     if analysis_results.get('CBullDivg_x2', False):
@@ -458,7 +592,7 @@ def _format_counts_box(title, counts):
     return "<br>".join(lines)
 
 
-def plot_with_plotly(df_main, analysis_results, counts_main, df_var2=None, variant2_results=None, counts_var2=None):
+def plot_with_plotly(df_main, analysis_results, counts_main, df_var2=None, variant2_results=None, counts_var2=None, asset_label=None):
     fig = make_subplots(
         rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05,
         subplot_titles=('Price', 'RSI', 'MACD Histogram'),
@@ -544,13 +678,16 @@ def plot_with_plotly(df_main, analysis_results, counts_main, df_var2=None, varia
         _add_outline(missing, 'V2 Missing', 'blue')
 
     # Layout/Legend
+    title_txt = 'Technical Analysis with Divergence Markers'
+    if asset_label:
+        title_txt = f"{asset_label} – {title_txt}"
     fig.update_layout(
-        title_text='Technical Analysis with Divergence Markers',
+        title_text=title_txt,
         xaxis_rangeslider_visible=False,
         template='plotly_dark',
         legend=dict(
             traceorder='grouped',
-            groupclick='togglegroup',  # Klick toggelt alle Traces der Gruppe (Classic+Hidden gemeinsam)
+            groupclick='togglegroup',  # Gruppe (Classic+Hidden) gemeinsam toggeln
             itemclick='toggle'
         ),
         height=1200
@@ -580,9 +717,207 @@ def plot_with_plotly(df_main, analysis_results, counts_main, df_var2=None, varia
 
 
 # -------------------------------------------------
-# DOE (inkl. Plot)
+# DOE – Visualisierungen
 # -------------------------------------------------
-def run_doe_analysis(df, doe_params_file="doe_parameters_example.csv"):
+def _doe_plot_total(df_counts, asset_label=None):
+    """Gesamt-Heatmap (Total über alle Analysen)."""
+    agg = (df_counts
+           .groupby(['Candle_Percent', 'MACD_Percent'], as_index=False)['Total']
+           .sum())
+    if agg.empty:
+        print("No DOE data for total heatmap.")
+        return
+    pivot = agg.pivot(index='Candle_Percent', columns='MACD_Percent', values='Total').fillna(0)
+
+    hm = go.Figure(data=go.Heatmap(
+        z=pivot.values,
+        x=pivot.columns.tolist(),
+        y=pivot.index.tolist(),
+        colorbar=dict(title='Total markers')
+    ))
+    title = "DOE – Total markers (sum over all analyses)"
+    if asset_label:
+        title = f"{asset_label} – {title}"
+    hm.update_layout(
+        title=title,
+        xaxis_title="MACD tolerance (%)",
+        yaxis_title="Candle tolerance (%)",
+        template="plotly_dark",
+        height=700
+    )
+
+    out_html = os.path.join('results', 'doe_heatmap_total.html')
+    hm.write_html(out_html)
+    print(f"DOE heatmap saved to: {out_html}")
+    hm.show()
+
+
+def _doe_plot_by_type(df_counts, single_pages=False, asset_label=None, overlay_points=None):
+    """
+    2×2-Facet mit einheitlicher Skala; Zellen-Text = Classic & Hidden.
+    Optional: single_pages=True erzeugt je Typ eigene HTMLs zusätzlich.
+    Erwartet Spalten: Candle_Percent, MACD_Percent, Analysis, Classic, Hidden, Total
+    """
+    analyses = ["CBullDivg", "CBullDivg_x2", "HBullDivg", "HBearDivg"]
+    df_counts = df_counts.copy()
+    if df_counts.empty:
+        print("No DOE data for by-type heatmaps.")
+        return
+
+    # globale Z-Max für konsistente Farbschale
+    zmax = (df_counts.groupby(['Candle_Percent', 'MACD_Percent', 'Analysis'])['Total']
+            .sum().max())
+    if pd.isna(zmax) or zmax <= 0:
+        zmax = None  # Plotly wählt automatisch
+
+    # Einzelseiten je Typ (optional)
+    if single_pages:
+        for a in analyses:
+            grp = (df_counts[df_counts['Analysis'] == a]
+                   .groupby(['Candle_Percent', 'MACD_Percent'], as_index=False)
+                   .sum(numeric_only=True))
+            if grp.empty:
+                print(f"DOE: no data for {a}, skipping single heatmap.")
+                continue
+
+            pv_total   = grp.pivot(index='Candle_Percent', columns='MACD_Percent', values='Total').sort_index().sort_index(axis=1).fillna(0)
+            pv_classic = grp.pivot(index='Candle_Percent', columns='MACD_Percent', values='Classic').reindex_like(pv_total).fillna(0)
+            pv_hidden  = grp.pivot(index='Candle_Percent', columns='MACD_Percent', values='Hidden').reindex_like(pv_total).fillna(0)
+
+            arr_c = pv_classic.astype(int).values
+            arr_h = pv_hidden.astype(int).values
+            text = np.char.add("C:", arr_c.astype(str))
+            text = np.char.add(text, "\nH:")
+            text = np.char.add(text, arr_h.astype(str))
+
+            fig = go.Figure(data=go.Heatmap(
+                z=pv_total.values, x=pv_total.columns.tolist(), y=pv_total.index.tolist(),
+                zmin=0 if zmax is not None else None, zmax=zmax,
+                text=text, texttemplate="%{text}",
+                hovertemplate="Candle: %{y}<br>MACD: %{x}<br>Total: %{z}<br>%{text}<extra></extra>",
+                colorbar=dict(title='Total')
+            ))
+            title = f"DOE – {a}"
+            if asset_label:
+                title = f"{asset_label} – {title}"
+            fig.update_layout(
+                title=title,
+                xaxis_title="MACD tolerance (%)",
+                yaxis_title="Candle tolerance (%)",
+                template="plotly_dark",
+                height=650
+            )
+            out_html = os.path.join('results', f"doe_heatmap_{a}.html")
+            fig.write_html(out_html)
+            print(f"DOE by-type heatmap saved to: {out_html}")
+            fig.show()
+
+    # Facet 2×2 (nur dieses HTML ist per Default aktiv)
+    fig = make_subplots(rows=2, cols=2,
+                        subplot_titles=analyses,
+                        vertical_spacing=0.12, horizontal_spacing=0.08)
+    rowcol = [(1,1),(1,2),(2,1),(2,2)]
+    for (a, (r, c)) in zip(analyses, rowcol):
+        grp = (df_counts[df_counts['Analysis'] == a]
+               .groupby(['Candle_Percent', 'MACD_Percent'], as_index=False)
+               .sum(numeric_only=True))
+        if grp.empty:
+            fig.add_annotation(text=f"No data for {a}", showarrow=False, row=r, col=c)
+            continue
+
+        pv_total   = grp.pivot(index='Candle_Percent', columns='MACD_Percent', values='Total').sort_index().sort_index(axis=1).fillna(0)
+        pv_classic = grp.pivot(index='Candle_Percent', columns='MACD_Percent', values='Classic').reindex_like(pv_total).fillna(0)
+        pv_hidden  = grp.pivot(index='Candle_Percent', columns='MACD_Percent', values='Hidden').reindex_like(pv_total).fillna(0)
+
+        arr_c = pv_classic.astype(int).values
+        arr_h = pv_hidden.astype(int).values
+        text = np.char.add("C:", arr_c.astype(str))
+        text = np.char.add(text, "\nH:")
+        text = np.char.add(text, arr_h.astype(str))
+
+        show_scale = (r, c) == (2, 2)  # Farbleiste nur im letzten Panel
+        trace = go.Heatmap(
+            z=pv_total.values, x=pv_total.columns.tolist(), y=pv_total.index.tolist(),
+            zmin=0 if zmax is not None else None, zmax=zmax,
+            text=text, texttemplate="%{text}",
+            hovertemplate="Candle: %{y}<br>MACD: %{x}<br>Total: %{z}<br>%{text}<extra></extra>",
+            showscale=show_scale, colorbar=dict(title='Total') if show_scale else None
+        )
+        fig.add_trace(trace, row=r, col=c)
+        # Overlay robust top/Pareto points if provided
+        if overlay_points and a in overlay_points:
+            pts = overlay_points[a]
+            if pts:
+                xs = [p['MACD_Percent'] for p in pts]
+                ys = [p['Candle_Percent'] for p in pts]
+                labels = [p.get('label', '') for p in pts]
+                fig.add_trace(
+                    go.Scatter(x=xs, y=ys, mode='markers+text', text=labels,
+                               textposition='top center',
+                               marker=dict(symbol='x', size=12, color='white', line=dict(width=1)),
+                               name=f"Top/Pareto – {a}"),
+                    row=r, col=c
+                )
+
+    title = "DOE – markers by divergence type (C: Classic, H: Hidden)"
+    if asset_label:
+        title = f"{asset_label} – {title}"
+    fig.update_layout(
+        title=title,
+        template="plotly_dark",
+        height=950
+    )
+    # Achsentitel für alle Subplots
+    for r in (1,2):
+        for c in (1,2):
+            fig.update_xaxes(title_text="MACD tolerance (%)", row=r, col=c)
+            fig.update_yaxes(title_text="Candle tolerance (%)", row=r, col=c)
+
+    out_html = os.path.join('results', 'doe_heatmaps_by_type.html')
+    fig.write_html(out_html)
+    print(f"DOE facet heatmaps saved to: {out_html}")
+    fig.show()
+
+
+# -------------------------------------------------
+# DOE (inkl. Plots)
+# -------------------------------------------------
+def _doe_worker(idx, candle_tol, macd_tol, df, window):
+    """
+    Worker for DOE: clones df, runs analysis, exports markers CSV, returns counts and filename.
+    Keeps behavior identical to sequential path by using export_markers_to_csv.
+    """
+    try:
+        df_copy = df.copy()
+        res = run_analysis(df_copy, 'e', window, candle_tol, macd_tol)
+        out_csv = f"doe_markers_candle{candle_tol}_macd{macd_tol}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        counts = export_markers_to_csv(df_copy, out_csv, res, candle_tol, macd_tol)
+        return {
+            'idx': idx,
+            'candle_tol': candle_tol,
+            'macd_tol': macd_tol,
+            'counts': counts,
+            'out_csv': out_csv,
+            'error': None,
+        }
+    except Exception as e:
+        return {
+            'idx': idx,
+            'candle_tol': candle_tol,
+            'macd_tol': macd_tol,
+            'counts': None,
+            'out_csv': None,
+            'error': str(e),
+        }
+
+
+def run_doe_analysis(df, doe_params_file="doe_parameters_example.csv",
+                     make_total=False, make_single=False, parallel=True, asset_label=None):
+    """
+    Standard: nur 2×2-Facet-HTML (alle 4 Typen) mit Classic/Hidden-Text.
+    Optional: make_total=True → Gesamt-Heatmap zusätzlich,
+              make_single=True → einzelne HTMLs je Typ zusätzlich.
+    """
     print(f"Loading DOE parameters from {doe_params_file}...")
     try:
         prm = pd.read_csv(doe_params_file)
@@ -597,82 +932,441 @@ def run_doe_analysis(df, doe_params_file="doe_parameters_example.csv"):
     all_counts_rows = []
     all_marker_frames = []
 
-    for idx, row in prm.iterrows():
-        candle_tol = float(row['candle_percent'])
-        macd_tol = float(row['macd_percent'])
-        print(f"\nRunning DOE iteration {idx + 1}: candle_tol={candle_tol}, macd_tol={macd_tol}")
+    # Maintain original processing order deterministically
+    indexed_params = [(idx, float(row['candle_percent']), float(row['macd_percent'])) for idx, row in prm.iterrows()]
+    t0 = time.perf_counter()
+    if not parallel or len(indexed_params) <= 1:
+        # Original sequential behavior
+        for idx, candle_tol, macd_tol in indexed_params:
+            print(f"\nRunning DOE iteration {idx + 1}: candle_tol={candle_tol}, macd_tol={macd_tol}")
 
-        df_copy = df.copy()
-        res = run_analysis(df_copy, 'e', window, candle_tol, macd_tol)
+            df_copy = df.copy()
+            res = run_analysis(df_copy, 'e', window, candle_tol, macd_tol)
 
-        out_csv = f"doe_markers_candle{candle_tol}_macd{macd_tol}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        counts = export_markers_to_csv(df_copy, out_csv, res, candle_tol, macd_tol)
+            out_csv = f"doe_markers_candle{candle_tol}_macd{macd_tol}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            counts = export_markers_to_csv(df_copy, out_csv, res, candle_tol, macd_tol)
 
-        for a_name, c_dict in counts.items():
-            all_counts_rows.append({
-                'Candle_Percent': candle_tol,
-                'MACD_Percent': macd_tol,
-                'Analysis': a_name,
-                'Classic': c_dict['classic'],
-                'Hidden': c_dict['hidden'],
-                'Total': c_dict['total']
-            })
+            for a_name, c_dict in counts.items():
+                all_counts_rows.append({
+                    'Candle_Percent': candle_tol,
+                    'MACD_Percent': macd_tol,
+                    'Analysis': a_name,
+                    'Classic': c_dict['classic'],
+                    'Hidden': c_dict['hidden'],
+                    'Total': c_dict['total']
+                })
 
+            try:
+                df_m = pd.read_csv(os.path.join('results', out_csv))
+                df_m['Candle_Percent'] = candle_tol
+                df_m['MACD_Percent'] = macd_tol
+                all_marker_frames.append(df_m)
+            except Exception:
+                pass
+    else:
+        # Parallel execution using ProcessPool for CPU-bound DOE
+        max_workers_env = os.getenv('DOE_MAX_WORKERS')
         try:
-            df_m = pd.read_csv(os.path.join('results', out_csv))
-            df_m['Candle_Percent'] = candle_tol
-            df_m['MACD_Percent'] = macd_tol
-            all_marker_frames.append(df_m)
+            max_workers = int(max_workers_env) if max_workers_env else min(len(indexed_params), (os.cpu_count() or 4))
         except Exception:
-            pass
+            max_workers = min(len(indexed_params), (os.cpu_count() or 4))
+
+        print(f"Running DOE in parallel (ProcessPool) with {max_workers} workers...")
+        results = []
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(_doe_worker, idx, c, m, df, window) for idx, c, m in indexed_params]
+            for f in as_completed(futures):
+                try:
+                    results.append(f.result())
+                except Exception as e:
+                    results.append({'idx': -1, 'error': str(e)})
+
+        # Sort back to original DataFrame order of DOE params
+        results.sort(key=lambda r: r['idx'])
+
+        # Aggregate exactly like sequential path
+        for r in results:
+            if r.get('error'):
+                print(f"DOE iteration {r['idx'] + 1} failed: {r['error']}")
+                continue
+            candle_tol = r['candle_tol']
+            macd_tol = r['macd_tol']
+            counts = r['counts'] or {}
+            out_csv = r['out_csv']
+
+            for a_name, c_dict in counts.items():
+                all_counts_rows.append({
+                    'Candle_Percent': candle_tol,
+                    'MACD_Percent': macd_tol,
+                    'Analysis': a_name,
+                    'Classic': c_dict['classic'],
+                    'Hidden': c_dict['hidden'],
+                    'Total': c_dict['total']
+                })
+
+            try:
+                df_m = pd.read_csv(os.path.join('results', out_csv))
+                df_m['Candle_Percent'] = candle_tol
+                df_m['MACD_Percent'] = macd_tol
+                all_marker_frames.append(df_m)
+            except Exception:
+                pass
+
+    elapsed = time.perf_counter() - t0
+    print(f"DOE completed in {elapsed:.2f}s across {len(indexed_params)} parameter pairs.")
+
+    overlay_points = None
 
     if all_counts_rows:
         os.makedirs('results', exist_ok=True)
+        df_counts = pd.DataFrame(all_counts_rows)
+
         # ===== Summary-Datei =====
         xlsx = os.path.join('results', f"doe_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
         if _HAS_XLSX:
             with pd.ExcelWriter(xlsx, engine='openpyxl') as writer:
-                df_counts = pd.DataFrame(all_counts_rows)
+                # Raw summary and optional markers
                 df_counts.to_excel(writer, sheet_name='DOE_Summary', index=False)
                 if all_marker_frames:
                     pd.concat(all_marker_frames, ignore_index=True).to_excel(writer, sheet_name='All_Markers', index=False)
+
+                # Add Grand Total row in DOE_Summary
                 ws = writer.sheets['DOE_Summary']
                 n = len(df_counts) + 2
                 ws.cell(row=n, column=1).value = 'Grand Total'
                 ws.cell(row=n, column=4).value = f'=SUM(D2:D{n - 1})'
                 ws.cell(row=n, column=5).value = f'=SUM(E2:E{n - 1})'
                 ws.cell(row=n, column=6).value = f'=SUM(F2:F{n - 1})'
+
+                # Nicely formatted pivot + heatmaps (Excel conditional formatting)
+                try:
+                    from openpyxl.formatting.rule import ColorScaleRule
+                    from openpyxl.utils import get_column_letter
+
+                    # 1) Overall pivot (Total across analyses)
+                    agg_total = (df_counts.groupby(['Candle_Percent', 'MACD_Percent'], as_index=False)['Total'].sum())
+                    if not agg_total.empty:
+                        pv_all = (agg_total.pivot(index='Candle_Percent', columns='MACD_Percent', values='Total')
+                                           .sort_index().sort_index(axis=1).fillna(0))
+                        pv_all.to_excel(writer, sheet_name='DOE_Pivot_Total')
+                        ws_pv = writer.sheets['DOE_Pivot_Total']
+                        # Apply 3-color scale to numeric block
+                        rows_n = pv_all.shape[0]
+                        cols_n = pv_all.shape[1]
+                        if rows_n > 0 and cols_n > 0:
+                            r1, c1 = 2, 2
+                            r2, c2 = 1 + rows_n, 1 + cols_n
+                            ref = f"{get_column_letter(c1)}{r1}:{get_column_letter(c2)}{r2}"
+                            ws_pv.conditional_formatting.add(ref, ColorScaleRule(start_type='min', start_color='93c47d',
+                                                                                mid_type='percentile', mid_value=50, mid_color='ffd966',
+                                                                                end_type='max', end_color='e06666'))
+                            ws_pv.freeze_panes = ws_pv['B2']
+
+                    # 2) Per-analysis heatmaps (Total, Classic, Hidden)
+                    analyses = ["CBullDivg", "CBullDivg_x2", "HBullDivg", "HBearDivg"]
+                    for a in analyses:
+                        grp = df_counts[df_counts['Analysis'] == a]
+                        if grp.empty:
+                            continue
+                        # Build three pivots
+                        pivots = {}
+                        for key in ['Total', 'Classic', 'Hidden']:
+                            pv = (grp.pivot_table(index='Candle_Percent', columns='MACD_Percent', values=key, aggfunc='sum')
+                                     .sort_index().sort_index(axis=1).fillna(0))
+                            pivots[key] = pv
+
+                        sheet_name = f"DOE_Heatmap_{a}"
+                        # Write sequentially: header + matrix, with blank row between blocks
+                        start_row = 1
+                        with pd.option_context('display.float_format', lambda v: f"{v:.0f}"):
+                            for title, pv in pivots.items():
+                                if pv.empty:
+                                    continue
+                                # Write title
+                                df_title = pd.DataFrame({f"{a} – {title}": []})
+                                df_title.to_excel(writer, sheet_name=sheet_name, startrow=start_row - 1, index=False)
+                                # Write pivot right below title
+                                pv.to_excel(writer, sheet_name=sheet_name, startrow=start_row, startcol=0)
+                                ws_hm = writer.sheets[sheet_name]
+                                rows_n = pv.shape[0]
+                                cols_n = pv.shape[1]
+                                if rows_n > 0 and cols_n > 0:
+                                    r1, c1 = start_row + 1, 2  # skip header row and index col
+                                    r2, c2 = start_row + rows_n, 1 + cols_n
+                                    ref = f"{get_column_letter(c1)}{r1}:{get_column_letter(c2)}{r2}"
+                                    # Color palette per metric for visual separation
+                                    if title == 'Total':
+                                        start_col, mid_col, end_col = '93c47d', 'ffd966', 'e06666'
+                                    elif title == 'Classic':
+                                        start_col, mid_col, end_col = '9fc5e8', 'b4a7d6', '674ea7'
+                                    else:  # Hidden
+                                        start_col, mid_col, end_col = 'f9cb9c', 'f6b26b', 'cc0000'
+                                    ws_hm.conditional_formatting.add(ref, ColorScaleRule(
+                                        start_type='min', start_color=start_col,
+                                        mid_type='percentile', mid_value=50, mid_color=mid_col,
+                                        end_type='max', end_color=end_col))
+                                    ws_hm.freeze_panes = ws_hm['B2']
+
+                                # Next block two rows below
+                                start_row += rows_n + 3
+                # ---- Overview & Deltas sheets ----
+                    from openpyxl.chart import BarChart, Reference
+                    from openpyxl.utils import get_column_letter as _gcl
+
+                    # Overview sheet aggregates
+                    ov_sheet = 'Overview'
+                    start_row = 0
+
+                    # A) Totals per Analysis (table + bar chart)
+                    totals_per_analysis = (df_counts.groupby('Analysis', as_index=False)['Total']
+                                            .sum().sort_values('Total', ascending=False))
+                    totals_per_analysis.to_excel(writer, sheet_name=ov_sheet, startrow=start_row, index=False)
+                    ws_ov = writer.sheets[ov_sheet]
+                    rows_n = len(totals_per_analysis) + 1
+                    if rows_n > 1:
+                        data_ref = Reference(ws_ov, min_col=2, min_row=start_row + 1, max_col=2, max_row=start_row + rows_n)
+                        cats_ref = Reference(ws_ov, min_col=1, min_row=start_row + 2, max_row=start_row + rows_n)
+                        ch = BarChart()
+                        ch.title = 'Totals per Analysis'
+                        ch.y_axis.title = 'Total markers'
+                        ch.x_axis.title = 'Analysis'
+                        ch.add_data(data_ref, titles_from_data=True)
+                        ch.set_categories(cats_ref)
+                        ch.height = 12
+                        ch.width = 20
+                        ws_ov.add_chart(ch, f"{_gcl(5)}{start_row + 2}")
+                    start_row += rows_n + 2
+
+                    # B) Analysis × MACD (table) and stacked chart by MACD
+                    pivot_axm = (df_counts.pivot_table(index='MACD_Percent', columns='Analysis', values='Total', aggfunc='sum')
+                                         .sort_index().fillna(0))
+                    if not pivot_axm.empty:
+                        pivot_axm.to_excel(writer, sheet_name=ov_sheet, startrow=start_row, startcol=0)
+                        rows_n = pivot_axm.shape[0] + 1
+                        cols_n = pivot_axm.shape[1] + 1
+                        data_ref = Reference(ws_ov, min_col=2, min_row=start_row + 1,
+                                             max_col=1 + pivot_axm.shape[1], max_row=start_row + rows_n)
+                        cats_ref = Reference(ws_ov, min_col=1, min_row=start_row + 2, max_row=start_row + rows_n)
+                        ch = BarChart()
+                        ch.type = 'col'
+                        ch.grouping = 'stacked'
+                        ch.title = 'Totals by MACD (stacked by Analysis)'
+                        ch.y_axis.title = 'Total markers'
+                        ch.x_axis.title = 'MACD tolerance (%)'
+                        ch.add_data(data_ref, titles_from_data=True)
+                        ch.set_categories(cats_ref)
+                        ch.height = 14
+                        ch.width = 28
+                        ws_ov.add_chart(ch, f"{_gcl(cols_n + 2)}{start_row + 2}")
+                        start_row += rows_n + 2
+
+                    # C) Analysis × Candle (table) and stacked chart by Candle
+                    pivot_axc = (df_counts.pivot_table(index='Candle_Percent', columns='Analysis', values='Total', aggfunc='sum')
+                                         .sort_index().fillna(0))
+                    if not pivot_axc.empty:
+                        pivot_axc.to_excel(writer, sheet_name=ov_sheet, startrow=start_row, startcol=0)
+                        rows_n = pivot_axc.shape[0] + 1
+                        cols_n = pivot_axc.shape[1] + 1
+                        data_ref = Reference(ws_ov, min_col=2, min_row=start_row + 1,
+                                             max_col=1 + pivot_axc.shape[1], max_row=start_row + rows_n)
+                        cats_ref = Reference(ws_ov, min_col=1, min_row=start_row + 2, max_row=start_row + rows_n)
+                        ch = BarChart()
+                        ch.type = 'col'
+                        ch.grouping = 'stacked'
+                        ch.title = 'Totals by Candle (stacked by Analysis)'
+                        ch.y_axis.title = 'Total markers'
+                        ch.x_axis.title = 'Candle tolerance (%)'
+                        ch.add_data(data_ref, titles_from_data=True)
+                        ch.set_categories(cats_ref)
+                        ch.height = 14
+                        ch.width = 28
+                        ws_ov.add_chart(ch, f"{_gcl(cols_n + 2)}{start_row + 2}")
+                        start_row += rows_n + 2
+
+                    # D) Simple matrices for quick scan: Analysis × MACD, Analysis × Candle
+                    # Write Analysis as rows
+                    mat_axm = (df_counts.pivot_table(index='Analysis', columns='MACD_Percent', values='Total', aggfunc='sum')
+                                       .sort_index().sort_index(axis=1).fillna(0))
+                    if not mat_axm.empty:
+                        mat_axm.to_excel(writer, sheet_name=ov_sheet, startrow=start_row, startcol=0)
+                        # conditional formatting
+                        ws = writer.sheets[ov_sheet]
+                        r1, c1 = start_row + 1, 2
+                        r2, c2 = start_row + mat_axm.shape[0], 1 + mat_axm.shape[1]
+                        ref = f"{_gcl(c1)}{r1}:{_gcl(c2)}{r2}"
+                        ws.conditional_formatting.add(ref, ColorScaleRule(start_type='min', start_color='93c47d',
+                                                                          mid_type='percentile', mid_value=50, mid_color='ffd966',
+                                                                          end_type='max', end_color='e06666'))
+                        start_row += mat_axm.shape[0] + 3
+
+                    mat_axc = (df_counts.pivot_table(index='Analysis', columns='Candle_Percent', values='Total', aggfunc='sum')
+                                       .sort_index().sort_index(axis=1).fillna(0))
+                    if not mat_axc.empty:
+                        mat_axc.to_excel(writer, sheet_name=ov_sheet, startrow=start_row, startcol=0)
+                        ws = writer.sheets[ov_sheet]
+                        r1, c1 = start_row + 1, 2
+                        r2, c2 = start_row + mat_axc.shape[0], 1 + mat_axc.shape[1]
+                        ref = f"{_gcl(c1)}{r1}:{_gcl(c2)}{r2}"
+                        ws.conditional_formatting.add(ref, ColorScaleRule(start_type='min', start_color='93c47d',
+                                                                          mid_type='percentile', mid_value=50, mid_color='ffd966',
+                                                                          end_type='max', end_color='e06666'))
+
+                    # E) Top-N parameter pairs (overall and per-analysis)
+                    try:
+                        top_n = int(os.getenv('DOE_TOP_N', 10))
+                    except Exception:
+                        top_n = 10
+
+                    # Overall Top-N by Total
+                    overall_pairs = (df_counts.groupby(['Candle_Percent', 'MACD_Percent'], as_index=False)
+                                              .agg(Classic=('Classic','sum'), Hidden=('Hidden','sum'), Total=('Total','sum'))
+                                              .sort_values('Total', ascending=False).head(top_n))
+                    if not overall_pairs.empty:
+                        # Add rank column first
+                        overall_pairs = overall_pairs.reset_index(drop=True)
+                        overall_pairs.insert(0, 'Rank', overall_pairs.index + 1)
+                        title_df = pd.DataFrame({f"Top {top_n} parameter pairs – Overall": []})
+                        title_df.to_excel(writer, sheet_name=ov_sheet, startrow=start_row, index=False)
+                        overall_pairs.to_excel(writer, sheet_name=ov_sheet, startrow=start_row + 1, index=False)
+                        start_row += len(overall_pairs) + 3
+
+                    # Per-analysis Top-N (stacked vertically)
+                    analyses = ["CBullDivg", "CBullDivg_x2", "HBullDivg", "HBearDivg"]
+                    for a in analyses:
+                        sub = df_counts[df_counts['Analysis'] == a]
+                        if sub.empty:
+                            continue
+                        top_pairs = (sub.groupby(['Candle_Percent', 'MACD_Percent'], as_index=False)
+                                         .agg(Classic=('Classic','sum'), Hidden=('Hidden','sum'), Total=('Total','sum'))
+                                         .sort_values('Total', ascending=False).head(top_n))
+                        if top_pairs.empty:
+                            continue
+                        top_pairs = top_pairs.reset_index(drop=True)
+                        top_pairs.insert(0, 'Rank', top_pairs.index + 1)
+                        title_df = pd.DataFrame({f"Top {top_n} parameter pairs – {a}": []})
+                        title_df.to_excel(writer, sheet_name=ov_sheet, startrow=start_row, index=False)
+                        top_pairs.to_excel(writer, sheet_name=ov_sheet, startrow=start_row + 1, index=False)
+                        start_row += len(top_pairs) + 3
+
+                    # Deltas vs. baseline (first DOE row as baseline)
+                    try:
+                        b_candle = float(prm.iloc[0]['candle_percent'])
+                        b_macd = float(prm.iloc[0]['macd_percent'])
+                        del_sheet = 'DOE_Deltas'
+                        start_row = 1
+                        analyses = ["CBullDivg", "CBullDivg_x2", "HBullDivg", "HBearDivg"]
+                        for a in analyses:
+                            base_total_row = df_counts[(df_counts['Candle_Percent'] == b_candle) &
+                                                       (df_counts['MACD_Percent'] == b_macd) &
+                                                       (df_counts['Analysis'] == a)]
+                            if base_total_row.empty:
+                                continue
+                            base_total = float(base_total_row['Total'].iloc[0])
+                            grp = (df_counts[df_counts['Analysis'] == a]
+                                            .groupby(['Candle_Percent', 'MACD_Percent'], as_index=False)
+                                            .sum(numeric_only=True))
+                            pv_total = (grp.pivot(index='Candle_Percent', columns='MACD_Percent', values='Total')
+                                          .sort_index().sort_index(axis=1).fillna(0))
+                            pv_delta = pv_total - base_total
+                            # Write title and delta matrix
+                            df_title = pd.DataFrame({f"Delta to baseline ({b_candle}, {b_macd}) – {a}": []})
+                            df_title.to_excel(writer, sheet_name=del_sheet, startrow=start_row - 1, index=False)
+                            pv_delta.to_excel(writer, sheet_name=del_sheet, startrow=start_row, startcol=0)
+                            ws_del = writer.sheets[del_sheet]
+                            rows_n = pv_delta.shape[0]
+                            cols_n = pv_delta.shape[1]
+                            if rows_n > 0 and cols_n > 0:
+                                r1, c1 = start_row + 1, 2
+                                r2, c2 = start_row + rows_n, 1 + cols_n
+                                ref = f"{_gcl(c1)}{r1}:{_gcl(c2)}{r2}"
+                                ws_del.conditional_formatting.add(ref, ColorScaleRule(
+                                    start_type='min', start_color='9fc5e8',
+                                    mid_type='percentile', mid_value=50, mid_color='ffffff',
+                                    end_type='max', end_color='e06666'))
+                                ws_del.freeze_panes = ws_del['B2']
+                            start_row += rows_n + 3
+                    except Exception:
+                        pass
+
+                except Exception as e:
+                    # Formatting is best-effort; keep file creation robust
+                    print(f"Warning: could not add Excel pivots/heatmaps: {e}")
+
             print(f"DOE summary exported to {xlsx}")
         else:
             csv = xlsx.replace('.xlsx', '.csv')
-            pd.DataFrame(all_counts_rows).to_csv(csv, index=False)
+            df_counts.to_csv(csv, index=False)
             print(f"DOE summary exported to {csv}")
 
-        # ===== Interaktives DOE-Plot (Heatmap Total über alle Analysen) =====
-        df_counts = pd.DataFrame(all_counts_rows)
-        agg = (df_counts
-               .groupby(['Candle_Percent', 'MACD_Percent'], as_index=False)['Total']
-               .sum())
-        pivot = agg.pivot(index='Candle_Percent', columns='MACD_Percent', values='Total').fillna(0)
+        # ===== Optional robust scoring via walk-forward CV =====
+        try:
+            n_splits = int(os.getenv('DOE_WF_SPLITS', '0'))
+        except Exception:
+            n_splits = 0
+        if n_splits and n_splits > 1 and 'date' in df.columns:
+            print(f"Walk-forward CV with {n_splits} folds for robust scoring...")
+            dates = pd.to_datetime(df['date'])
+            cut_idx = np.linspace(0, len(df), n_splits + 1, dtype=int)
+            lam = float(os.getenv('DOE_ROBUST_LAMBDA', '1.0'))
+            analyses = ["CBullDivg", "CBullDivg_x2", "HBullDivg", "HBearDivg"]
+            per_type_points = {a: [] for a in analyses}
 
-        hm = go.Figure(data=go.Heatmap(
-            z=pivot.values,
-            x=pivot.columns.tolist(),
-            y=pivot.index.tolist(),
-            colorbar=dict(title='Total markers')
-        ))
-        hm.update_layout(
-            title="DOE – Total markers (sum over all analyses)",
-            xaxis_title="MACD tolerance (%)",
-            yaxis_title="Candle tolerance (%)",
-            template="plotly_dark",
-            height=700
-        )
+            for a in analyses:
+                atype_char = {'CBullDivg':'a','CBullDivg_x2':'b','HBearDivg':'c','HBullDivg':'d'}[a]
+                for _, ctol, mtol in indexed_params:
+                    totals = []
+                    for k in range(n_splits):
+                        lo, hi = cut_idx[k], cut_idx[k+1]
+                        df_slice = df.iloc[lo:hi].copy()
+                        res = run_analysis(df_slice, atype_char, window, ctol, mtol)
+                        counts_k = export_markers_to_csv(df_slice, f"_tmp_cv_{a}_{k}.csv", res, ctol, mtol)
+                        totals.append(counts_k.get(a, {}).get('total', 0))
+                    mean_v = float(np.mean(totals)) if totals else 0.0
+                    std_v = float(np.std(totals, ddof=1)) if len(totals) > 1 else 0.0
+                    score = mean_v - lam * std_v
+                    per_type_points[a].append({
+                        'Candle_Percent': ctol,
+                        'MACD_Percent': mtol,
+                        'mean': mean_v,
+                        'std': std_v,
+                        'score': score,
+                    })
 
-        out_html = os.path.join('results', 'doe_heatmap_total.html')
-        hm.write_html(out_html)
-        print(f"DOE heatmap saved to: {out_html}")
-        hm.show()
+            # Top-N and Pareto front overlay
+            def _pareto_front(pts):
+                front = []
+                for i, p in enumerate(pts):
+                    dom = False
+                    for j, q in enumerate(pts):
+                        if j == i:
+                            continue
+                        if (q['mean'] >= p['mean']) and (q['std'] <= p['std']) and ((q['mean'] > p['mean']) or (q['std'] < p['std'])):
+                            dom = True
+                            break
+                    if not dom:
+                        front.append(p)
+                return front
+
+            try:
+                topn = int(os.getenv('DOE_TOPN_OVERLAY', '5'))
+            except Exception:
+                topn = 5
+            overlay_points = {}
+            for a, pts in per_type_points.items():
+                if not pts:
+                    continue
+                top = sorted(pts, key=lambda p: p['score'], reverse=True)[:topn]
+                for t in top:
+                    t['label'] = f"S:{t['score']:.1f}"
+                pareto = _pareto_front(pts)
+                for p in pareto:
+                    p['label'] = (p.get('label') or '') + ' P'
+                overlay_points[a] = top + pareto
+
+        # ===== Interaktive DOE-Plots =====
+        if make_total:
+            _doe_plot_total(df_counts, asset_label=asset_label)
+        _doe_plot_by_type(df_counts, single_pages=make_single, asset_label=asset_label, overlay_points=overlay_points)
 
 
 # -------------------------------------------------
@@ -687,7 +1381,7 @@ if __name__ == "__main__":
     atype = get_analysis_type()
 
     # Parameter nur, wenn nicht DOE
-    if atype != 'f':
+    if atype not in ('f', 'g', 'h'):
         candle_percent, macd_percent, variant2 = get_analysis_parameters()
 
     print(f"Loading data from: {path}")
@@ -704,6 +1398,27 @@ if __name__ == "__main__":
 
     df['date'] = pd.to_datetime(df['date'], utc=True, errors='coerce')
     df = df.dropna(subset=['date']).sort_values('date').reset_index(drop=True)
+    # Echo full available span after load
+    try:
+        _min_dt = df['date'].min()
+        _max_dt = df['date'].max()
+        print(f"Asset timespan: {_min_dt} → {_max_dt}")
+    except Exception:
+        pass
+
+    # Asset label for plot titles
+    def _asset_label_from(path_in, df_in):
+        base = os.path.splitext(os.path.basename(path_in))[0]
+        try:
+            if 'symbol' in df_in.columns and df_in['symbol'].dropna().nunique() == 1:
+                sym = str(df_in['symbol'].dropna().iloc[0])
+                return f"{sym} ({base})"
+        except Exception:
+            pass
+        return base
+
+    asset_label = _asset_label_from(path, df)
+    print(f"Asset: {asset_label}")
 
     print("Initializing indicators...")
     Initialize_RSI_EMA_MACD(df)
@@ -711,7 +1426,7 @@ if __name__ == "__main__":
 
     window = 5
 
-    if atype != 'f':
+    if atype not in ('f', 'g', 'h'):
         print(f"Running analysis with parameters: window={window}, candle_tol={candle_percent}, macd_tol={macd_percent}")
         analysis_results = run_analysis(df, atype, window, candle_percent, macd_percent)
         out_csv = f"markers_output_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
@@ -731,7 +1446,127 @@ if __name__ == "__main__":
         df = df.set_index('date')
         if df2 is not None:
             df2 = df2.set_index('date')
-        plot_with_plotly(df, analysis_results, counts, df2, res2, counts2)
+        plot_with_plotly(df, analysis_results, counts, df2, res2, counts2, asset_label=asset_label)
 
+    elif atype == 'f':
+        # Deine Vorgabe: NUR 2×2-HTML mit allen vier Divergenztypen
+        run_doe_analysis(df, make_total=False, make_single=False, asset_label=asset_label)
     else:
-        run_doe_analysis(df)
+        # Backtesting path
+        # Collect markers CSVs from results folder
+        try:
+            candidates = []
+            os.makedirs('results', exist_ok=True)
+            for fn in os.listdir('results'):
+                if fn.lower().endswith('.csv') and 'markers' in fn.lower():
+                    candidates.append(os.path.join('results', fn))
+            candidates.sort()
+            selected = []
+            if atype == 'h':
+                selected = [p for p in candidates if os.path.basename(p).startswith('doe_markers_')]
+                if not selected:
+                    print("No doe_markers_*.csv found in results/. Run DOE first.")
+                    raise SystemExit(0)
+            else:
+                print("\nAvailable markers CSV files in results/:")
+                for i, p in enumerate(candidates, 1):
+                    print(f"{i}: {p}")
+                print("0: Use ALL listed")
+                sel = input("Select file number (or 0 for ALL): ").strip()
+                if sel.isdigit() and int(sel) > 0 and int(sel) <= len(candidates):
+                    selected = [candidates[int(sel) - 1]]
+                else:
+                    selected = candidates
+            if not selected:
+                print("No markers CSV found in results/. Please run an analysis first.")
+                raise SystemExit(0)
+
+            # Optional: restrict trading timespan
+            s_dt, e_dt = select_backtest_timespan(df)
+            if s_dt and e_dt:
+                print(f"Selected backtest span: {s_dt} to {e_dt}")
+                before = len(df)
+                df = df[(df['date'] >= s_dt) & (df['date'] <= e_dt)].reset_index(drop=True)
+                print(f"Rows after span filter: {len(df)} (from {before})")
+                # Sanity echo of new actual span
+                try:
+                    print(f"Applied backtest span: {df['date'].min()} to {df['date'].max()}")
+                except Exception:
+                    pass
+            else:
+                # Use full span
+                s_dt = pd.to_datetime(df['date']).min()
+                e_dt = pd.to_datetime(df['date']).max()
+
+            # Load markers
+            mks = []
+            for p in selected:
+                try:
+                    dfm = pd.read_csv(p)
+                    if 'Date' in dfm.columns:
+                        dfm['SourceCSV'] = os.path.basename(p)
+                        if s_dt and e_dt:
+                            # prefilter markers into selected span
+                            tmp = dfm.copy()
+                            tmp['Date'] = pd.to_datetime(tmp['Date'], utc=True, errors='coerce')
+                            tmp = tmp[(tmp['Date'] >= s_dt) & (tmp['Date'] <= e_dt)]
+                            mks.append(tmp)
+                        else:
+                            mks.append(dfm)
+                except Exception as e:
+                    print(f"Warning: cannot load {p}: {e}")
+            if not mks:
+                print("No valid markers loaded. Exiting.")
+                raise SystemExit(0)
+            markers_df = pd.concat(mks, ignore_index=True)
+
+            # Prompt for backtest parameters and run
+            bt_params = backtest_prompt_params()
+            # Attach selected backtest timespan to params for reporting
+            try:
+                bt_params.backtest_start = s_dt
+                bt_params.backtest_end = e_dt
+            except Exception:
+                pass
+            # Robust printing (avoid issues if attributes missing)
+            ps = bt_params
+            parts = [
+                f"risk={getattr(ps, 'risk_pct', 'n/a')}%",
+                f"stop={getattr(ps, 'stop_pct', 'n/a')}%",
+                f"tp={getattr(ps, 'tp_pct', 'n/a')}%",
+                f"fee/side={getattr(ps, 'fee_pct', 'n/a')}%",
+                f"slippage={getattr(ps, 'slippage_pct', 'n/a')}%",
+                f"max_pos%={getattr(ps, 'max_position_value_pct', 'n/a')}%",
+                f"eq_cap={getattr(ps, 'equity_cap', 'n/a')}",
+                f"time_stop={getattr(ps, 'time_stop_bars', 'n/a')}",
+                f"single_pos={getattr(ps, 'single_position_mode', 'n/a')}",
+                f"span=[{s_dt} → {e_dt}]",
+            ]
+            print("\nBacktesting with: " + ", ".join(parts))
+            results = run_backtest(df.copy(), markers_df, bt_params)
+
+            # Console summary
+            summ = results.get('summary', pd.DataFrame())
+            if not summ.empty:
+                s = summ.iloc[0].to_dict()
+                print("\n=== Backtest Summary ===")
+                for k, v in s.items():
+                    print(f"{k}: {v}")
+            else:
+                print("No trades generated for the selected markers/params.")
+
+            # XLSX export
+            base_name = 'backtest_doe_combined' if atype == 'h' else 'backtest'
+            # Append span to filename: sYYYYMMDD[_HHMM]-eYYYYMMDD[_HHMM]
+            def _fmt_span(ts):
+                try:
+                    # include time if intraday
+                    return pd.to_datetime(ts).strftime('%Y%m%d_%H%M') if (getattr(pd.to_datetime(ts), 'hour', 0) != 0 or getattr(pd.to_datetime(ts), 'minute', 0) != 0) else pd.to_datetime(ts).strftime('%Y%m%d')
+                except Exception:
+                    return 'span'
+            span_tag = f"s{_fmt_span(s_dt)}-e{_fmt_span(e_dt)}"
+            out_xlsx = os.path.join('results', f"{base_name}_{span_tag}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
+            export_backtest_xlsx(results, out_xlsx)
+            print(f"Backtest report saved to: {out_xlsx}")
+        except (EOFError, KeyboardInterrupt):
+            print("Backtest cancelled by user.")

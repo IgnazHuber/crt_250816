@@ -320,8 +320,7 @@ def run_analysis(df, analysis_type, window=5, candle_tol=0.1, macd_tol=3.25):
 # -------------------------------------------------
 # Marker-Export (CSV/XLSX mit Summary)
 # -------------------------------------------------
-def export_markers_to_csv(df, filename, analysis_results, candle_percent, macd_percent):
-    os.makedirs('results', exist_ok=True)
+def generate_markers_df(df, analysis_results, candle_percent, macd_percent, asset_tag=None):
     markers = []
     counts = {k: {'classic': 0, 'hidden': 0, 'total': 0}
               for k, v in analysis_results.items() if v}
@@ -331,12 +330,12 @@ def export_markers_to_csv(df, filename, analysis_results, candle_percent, macd_p
             'Type': t,
             'Date': dt,
             'Candle_Percent': candle_percent,
-            'MACD_Percent': macd_percent
+            'MACD_Percent': macd_percent,
+            'Asset_Tag': asset_tag or ''
         })
 
     for i in range(len(df)):
         dt = df['date'].iloc[i]
-        # Classic Bullish
         if analysis_results.get('CBullDivg', False):
             if 'CBullD_gen' in df.columns and pd.notna(df.at[i, 'CBullD_gen']) and df.at[i, 'CBullD_gen'] == 1:
                 _append('CBullDivg_Classic', dt)
@@ -344,20 +343,14 @@ def export_markers_to_csv(df, filename, analysis_results, candle_percent, macd_p
             if 'CBullD_neg_MACD' in df.columns and pd.notna(df.at[i, 'CBullD_neg_MACD']) and df.at[i, 'CBullD_neg_MACD'] == 1:
                 _append('CBullDivg_Hidden', dt)
                 counts['CBullDivg']['hidden'] += 1
-
-        # x2
         if analysis_results.get('CBullDivg_x2', False):
             if 'CBullD_x2_gen' in df.columns and pd.notna(df.at[i, 'CBullD_x2_gen']) and df.at[i, 'CBullD_x2_gen'] == 1:
                 _append('CBullDivg_x2_Classic', dt)
                 counts['CBullDivg_x2']['classic'] += 1
-
-        # Hidden Bearish
         if analysis_results.get('HBearDivg', False):
             if 'HBearD_gen' in df.columns and pd.notna(df.at[i, 'HBearD_gen']) and df.at[i, 'HBearD_gen'] == 1:
                 _append('HBearDivg_Classic', dt)
                 counts['HBearDivg']['classic'] += 1
-
-        # Hidden Bullish
         if analysis_results.get('HBullDivg', False):
             if 'HBullD_gen' in df.columns and pd.notna(df.at[i, 'HBullD_gen']) and df.at[i, 'HBullD_gen'] == 1:
                 _append('HBullDivg_Classic', dt)
@@ -366,24 +359,32 @@ def export_markers_to_csv(df, filename, analysis_results, candle_percent, macd_p
                 _append('HBullDivg_Hidden', dt)
                 counts['HBullDivg']['hidden'] += 1
 
-    # Totale
     for k in counts:
         counts[k]['total'] = counts[k]['classic'] + counts[k]['hidden']
+    return pd.DataFrame(markers), counts
+
+
+def export_markers_to_csv(df, filename, analysis_results, candle_percent, macd_percent, asset_tag=None):
+    os.makedirs('results', exist_ok=True)
+    markers_df, counts = generate_markers_df(df, analysis_results, candle_percent, macd_percent, asset_tag=asset_tag)
 
     print("\n=== ANALYSIS SUMMARY ===")
     for name, c in counts.items():
         print(f"{name}: Classic={c['classic']}, Hidden={c['hidden']}, Total={c['total']}")
-    print(f"\nGrand Total markers found: {len(markers)}")
+    print(f"\nGrand Total markers found: {len(markers_df)}")
 
     # CSV
-    csv_path = os.path.join('results', filename)
-    pd.DataFrame(markers).to_csv(csv_path, index=False)
+    fname = filename
+    if asset_tag and not filename.startswith(f"{asset_tag}_"):
+        fname = f"{asset_tag}_" + filename
+    csv_path = os.path.join('results', fname)
+    markers_df.to_csv(csv_path, index=False)
     print(f"\nMarkers exported to {csv_path}")
 
     # XLSX (optional)
     if _HAS_XLSX:
         xlsx_path = csv_path.replace('.csv', '.xlsx')
-        df_x = pd.DataFrame(markers).copy()
+        df_x = markers_df.copy()
         if not df_x.empty:
             df_x['Date'] = pd.to_datetime(df_x['Date']).dt.tz_localize(None)
         with pd.ExcelWriter(xlsx_path, engine='openpyxl') as writer:
@@ -710,7 +711,11 @@ def plot_with_plotly(df_main, analysis_results, counts_main, df_var2=None, varia
 
     # speichern & anzeigen
     os.makedirs('results', exist_ok=True)
-    out_html = os.path.join('results', 'plot.html')
+    base = 'plot.html'
+    if asset_label:
+        safe = str(asset_label).split(' ')[0].replace('/', '_')
+        base = f"{safe}_plot.html"
+    out_html = os.path.join('results', base)
     fig.write_html(out_html)
     print(f"\nInteractive plot saved to: {out_html}")
     fig.show()
@@ -746,7 +751,9 @@ def _doe_plot_total(df_counts, asset_label=None):
         height=700
     )
 
-    out_html = os.path.join('results', 'doe_heatmap_total.html')
+    tag = (asset_label or '').split(' ')[0] if asset_label else None
+    fname = f"{tag}_doe_heatmap_total.html" if tag else 'doe_heatmap_total.html'
+    out_html = os.path.join('results', fname)
     hm.write_html(out_html)
     print(f"DOE heatmap saved to: {out_html}")
     hm.show()
@@ -807,7 +814,9 @@ def _doe_plot_by_type(df_counts, single_pages=False, asset_label=None, overlay_p
                 template="plotly_dark",
                 height=650
             )
-            out_html = os.path.join('results', f"doe_heatmap_{a}.html")
+            tag = (asset_label or '').split(' ')[0] if asset_label else None
+            fname = f"{tag}_doe_heatmap_{a}.html" if tag else f"doe_heatmap_{a}.html"
+            out_html = os.path.join('results', fname)
             fig.write_html(out_html)
             print(f"DOE by-type heatmap saved to: {out_html}")
             fig.show()
@@ -873,7 +882,9 @@ def _doe_plot_by_type(df_counts, single_pages=False, asset_label=None, overlay_p
             fig.update_xaxes(title_text="MACD tolerance (%)", row=r, col=c)
             fig.update_yaxes(title_text="Candle tolerance (%)", row=r, col=c)
 
-    out_html = os.path.join('results', 'doe_heatmaps_by_type.html')
+    tag = (asset_label or '').split(' ')[0] if asset_label else None
+    fname = f"{tag}_doe_heatmaps_by_type.html" if tag else 'doe_heatmaps_by_type.html'
+    out_html = os.path.join('results', fname)
     fig.write_html(out_html)
     print(f"DOE facet heatmaps saved to: {out_html}")
     fig.show()
@@ -882,7 +893,7 @@ def _doe_plot_by_type(df_counts, single_pages=False, asset_label=None, overlay_p
 # -------------------------------------------------
 # DOE (inkl. Plots)
 # -------------------------------------------------
-def _doe_worker(idx, candle_tol, macd_tol, df, window):
+def _doe_worker(idx, candle_tol, macd_tol, df, window, asset_tag=None):
     """
     Worker for DOE: clones df, runs analysis, exports markers CSV, returns counts and filename.
     Keeps behavior identical to sequential path by using export_markers_to_csv.
@@ -891,7 +902,7 @@ def _doe_worker(idx, candle_tol, macd_tol, df, window):
         df_copy = df.copy()
         res = run_analysis(df_copy, 'e', window, candle_tol, macd_tol)
         out_csv = f"doe_markers_candle{candle_tol}_macd{macd_tol}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        counts = export_markers_to_csv(df_copy, out_csv, res, candle_tol, macd_tol)
+        counts = export_markers_to_csv(df_copy, out_csv, res, candle_tol, macd_tol, asset_tag=asset_tag)
         return {
             'idx': idx,
             'candle_tol': candle_tol,
@@ -934,6 +945,8 @@ def run_doe_analysis(df, doe_params_file="doe_parameters_example.csv",
 
     # Maintain original processing order deterministically
     indexed_params = [(idx, float(row['candle_percent']), float(row['macd_percent'])) for idx, row in prm.iterrows()]
+    # Derive asset tag
+    tag = (asset_label or '').split(' ')[0] if asset_label else None
     t0 = time.perf_counter()
     if not parallel or len(indexed_params) <= 1:
         # Original sequential behavior
@@ -944,7 +957,7 @@ def run_doe_analysis(df, doe_params_file="doe_parameters_example.csv",
             res = run_analysis(df_copy, 'e', window, candle_tol, macd_tol)
 
             out_csv = f"doe_markers_candle{candle_tol}_macd{macd_tol}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-            counts = export_markers_to_csv(df_copy, out_csv, res, candle_tol, macd_tol)
+            counts = export_markers_to_csv(df_copy, out_csv, res, candle_tol, macd_tol, asset_tag=tag)
 
             for a_name, c_dict in counts.items():
                 all_counts_rows.append({
@@ -974,7 +987,7 @@ def run_doe_analysis(df, doe_params_file="doe_parameters_example.csv",
         print(f"Running DOE in parallel (ProcessPool) with {max_workers} workers...")
         results = []
         with ProcessPoolExecutor(max_workers=max_workers) as executor:
-            futures = [executor.submit(_doe_worker, idx, c, m, df, window) for idx, c, m in indexed_params]
+            futures = [executor.submit(_doe_worker, idx, c, m, df, window, tag) for idx, c, m in indexed_params]
             for f in as_completed(futures):
                 try:
                     results.append(f.result())
@@ -1016,17 +1029,39 @@ def run_doe_analysis(df, doe_params_file="doe_parameters_example.csv",
     print(f"DOE completed in {elapsed:.2f}s across {len(indexed_params)} parameter pairs.")
 
     overlay_points = None
+    overlay_points_bt = None
+    df_bt_cv = None
 
     if all_counts_rows:
         os.makedirs('results', exist_ok=True)
         df_counts = pd.DataFrame(all_counts_rows)
+        tag = (asset_label or '').split(' ')[0] if asset_label else ''
+        if tag:
+            df_counts['Asset_Tag'] = tag
 
         # ===== Summary-Datei =====
-        xlsx = os.path.join('results', f"doe_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
+        tag = (asset_label or '').split(' ')[0] if asset_label else None
+        prefix = f"{tag}_" if tag else ""
+        xlsx = os.path.join('results', f"{prefix}doe_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
         if _HAS_XLSX:
             with pd.ExcelWriter(xlsx, engine='openpyxl') as writer:
                 # Raw summary and optional markers
                 df_counts.to_excel(writer, sheet_name='DOE_Summary', index=False)
+                # Info sheet: asset/frequency and run meta
+                info_rows = []
+                min_dt = pd.to_datetime(df['date']).min() if 'date' in df.columns else None
+                max_dt = pd.to_datetime(df['date']).max() if 'date' in df.columns else None
+                info_rows.append({'Asset_Tag': (asset_label or ''), 'Start': str(min_dt) if min_dt is not None else '', 'End': str(max_dt) if max_dt is not None else ''})
+                # include robust configs if present
+                try:
+                    info_rows.append({'DOE_WF_SPLITS': int(os.getenv('DOE_WF_SPLITS', '0')), 'DOE_ROBUST_LAMBDA': float(os.getenv('DOE_ROBUST_LAMBDA', '1.0'))})
+                except Exception:
+                    pass
+                try:
+                    info_rows.append({'DOE_BT_WF_SPLITS': int(os.getenv('DOE_BT_WF_SPLITS', '0')), 'DOE_BT_ROBUST_KPI': os.getenv('DOE_BT_ROBUST_KPI', 'Total_PnL'), 'DOE_ROBUST_LAMBDA': float(os.getenv('DOE_ROBUST_LAMBDA', '1.0'))})
+                except Exception:
+                    pass
+                pd.DataFrame(info_rows).to_excel(writer, sheet_name='Info', index=False)
                 if all_marker_frames:
                     pd.concat(all_marker_frames, ignore_index=True).to_excel(writer, sheet_name='All_Markers', index=False)
 
@@ -1292,13 +1327,17 @@ def run_doe_analysis(df, doe_params_file="doe_parameters_example.csv",
                     # Formatting is best-effort; keep file creation robust
                     print(f"Warning: could not add Excel pivots/heatmaps: {e}")
 
+                # Robust DOE Backtest summary sheet
+                if 'df_bt_cv' in locals() and df_bt_cv is not None and not df_bt_cv.empty:
+                    df_bt_cv.to_excel(writer, sheet_name='DOE_BT_Robust', index=False)
+
             print(f"DOE summary exported to {xlsx}")
         else:
             csv = xlsx.replace('.xlsx', '.csv')
             df_counts.to_csv(csv, index=False)
             print(f"DOE summary exported to {csv}")
 
-        # ===== Optional robust scoring via walk-forward CV =====
+        # ===== Optional robust scoring via walk-forward CV (marker counts) =====
         try:
             n_splits = int(os.getenv('DOE_WF_SPLITS', '0'))
         except Exception:
@@ -1363,10 +1402,80 @@ def run_doe_analysis(df, doe_params_file="doe_parameters_example.csv",
                     p['label'] = (p.get('label') or '') + ' P'
                 overlay_points[a] = top + pareto
 
+        # ===== Optional robust DOE Backtest CV on KPIs =====
+        try:
+            bt_splits = int(os.getenv('DOE_BT_WF_SPLITS', '0'))
+        except Exception:
+            bt_splits = 0
+        kpi = os.getenv('DOE_BT_ROBUST_KPI', 'Total_PnL')
+        lam_bt = float(os.getenv('DOE_ROBUST_LAMBDA', '1.0'))
+        if bt_splits and bt_splits > 1 and 'date' in df.columns:
+            print(f"Backtest walk-forward CV with {bt_splits} folds for robust KPI={kpi}...")
+            dates = pd.to_datetime(df['date'])
+            cut_idx = np.linspace(0, len(df), bt_splits + 1, dtype=int)
+            rows = []
+            for _, ctol, mtol in indexed_params:
+                vals = []
+                for k in range(bt_splits):
+                    lo, hi = cut_idx[k], cut_idx[k+1]
+                    df_slice = df.iloc[lo:hi].copy()
+                    res = run_analysis(df_slice, 'e', window, ctol, mtol)
+                    mk_df, _ = generate_markers_df(df_slice, res, ctol, mtol, asset_tag=asset_label)
+                    # backtest with default params (env-controlled fees/slip)
+                    from Backtest_Divergences import BacktestParams, backtest as run_backtest
+                    try:
+                        fee_def = float(os.getenv('BT_FEE_PCT', '0.0'))
+                    except Exception:
+                        fee_def = 0.0
+                    try:
+                        slip_def = float(os.getenv('BT_SLIPPAGE_PCT', '0.0'))
+                    except Exception:
+                        slip_def = 0.0
+                    params = BacktestParams(fee_pct=fee_def, slippage_pct=slip_def)
+                    bt_res = run_backtest(df_slice.copy(), mk_df.copy(), params)
+                    summ = bt_res.get('summary')
+                    if summ is not None and not summ.empty:
+                        v = float(summ.iloc[0].get(kpi, np.nan))
+                        if pd.notna(v):
+                            vals.append(v)
+                if vals:
+                    mean_v = float(np.mean(vals))
+                    std_v = float(np.std(vals, ddof=1)) if len(vals) > 1 else 0.0
+                    score = mean_v - lam_bt * std_v
+                    rows.append({'Candle_Percent': ctol, 'MACD_Percent': mtol, f'{kpi}_mean': mean_v, f'{kpi}_std': std_v, 'Score': score})
+            if rows:
+                df_bt_cv = pd.DataFrame(rows)
+                # Overlay same robust BT points on all panels
+                try:
+                    topn = int(os.getenv('DOE_TOPN_OVERLAY', '5'))
+                except Exception:
+                    topn = 5
+                pts_sorted = sorted(rows, key=lambda r: r['Score'], reverse=True)[:topn]
+                for p in pts_sorted:
+                    p['label'] = f"BT S:{p['Score']:.1f}"
+                # simple Pareto on (mean increase, std decrease)
+                def pareto_bt(pts):
+                    front = []
+                    for i, a in enumerate(pts):
+                        dom = False
+                        for j, b in enumerate(pts):
+                            if i == j: continue
+                            if (b[f'{kpi}_mean'] >= a[f'{kpi}_mean']) and (b[f'{kpi}_std'] <= a[f'{kpi}_std']) and ((b[f'{kpi}_mean'] > a[f'{kpi}_mean']) or (b[f'{kpi}_std'] < a[f'{kpi}_std'])):
+                                dom = True; break
+                        if not dom:
+                            front.append(a)
+                    return front
+                front = pareto_bt(rows)
+                for p in front:
+                    p['label'] = (p.get('label','') + ' P').strip()
+                overlay_points_bt = {a: [{ 'MACD_Percent': r['MACD_Percent'], 'Candle_Percent': r['Candle_Percent'], 'label': r.get('label','') } for r in pts_sorted + front] for a in ["CBullDivg","CBullDivg_x2","HBullDivg","HBearDivg"]}
+
         # ===== Interaktive DOE-Plots =====
         if make_total:
             _doe_plot_total(df_counts, asset_label=asset_label)
-        _doe_plot_by_type(df_counts, single_pages=make_single, asset_label=asset_label, overlay_points=overlay_points)
+        # Merge overlays if both present
+        overlay_combined = overlay_points_bt or overlay_points
+        _doe_plot_by_type(df_counts, single_pages=make_single, asset_label=asset_label, overlay_points=overlay_combined)
 
 
 # -------------------------------------------------
@@ -1416,8 +1525,15 @@ if __name__ == "__main__":
         except Exception:
             pass
         return base
+    def _asset_tag_from(path_in):
+        base = os.path.splitext(os.path.basename(path_in))[0]
+        parts = base.split('_')
+        if len(parts) >= 2:
+            return f"{parts[0]}_{parts[1]}"
+        return parts[0]
 
     asset_label = _asset_label_from(path, df)
+    asset_tag = _asset_tag_from(path)
     print(f"Asset: {asset_label}")
 
     print("Initializing indicators...")
@@ -1430,7 +1546,7 @@ if __name__ == "__main__":
         print(f"Running analysis with parameters: window={window}, candle_tol={candle_percent}, macd_tol={macd_percent}")
         analysis_results = run_analysis(df, atype, window, candle_percent, macd_percent)
         out_csv = f"markers_output_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        counts = export_markers_to_csv(df, out_csv, analysis_results, candle_percent, macd_percent)
+        counts = export_markers_to_csv(df, out_csv, analysis_results, candle_percent, macd_percent, asset_tag=asset_tag)
 
         df2 = None
         res2 = None
@@ -1440,7 +1556,7 @@ if __name__ == "__main__":
             df2 = df.copy()
             res2 = run_analysis(df2, atype, window, variant2[0], variant2[1])
             out_csv2 = f"variant2_{variant2[0]}_{variant2[1]}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-            counts2 = export_markers_to_csv(df2, out_csv2, res2, variant2[0], variant2[1])
+            counts2 = export_markers_to_csv(df2, out_csv2, res2, variant2[0], variant2[1], asset_tag=asset_tag)
 
         # Plot (Index auf 'date')
         df = df.set_index('date')
@@ -1463,7 +1579,8 @@ if __name__ == "__main__":
             candidates.sort()
             selected = []
             if atype == 'h':
-                selected = [p for p in candidates if os.path.basename(p).startswith('doe_markers_')]
+                # Accept files that contain 'doe_markers_' anywhere in the basename (asset-tag prefixes)
+                selected = [p for p in candidates if 'doe_markers_' in os.path.basename(p).lower()]
                 if not selected:
                     print("No doe_markers_*.csv found in results/. Run DOE first.")
                     raise SystemExit(0)
@@ -1544,6 +1661,11 @@ if __name__ == "__main__":
             ]
             print("\nBacktesting with: " + ", ".join(parts))
             results = run_backtest(df.copy(), markers_df, bt_params)
+            try:
+                if 'summary' in results and not results['summary'].empty:
+                    results['summary']['Asset_Tag'] = asset_tag
+            except Exception:
+                pass
 
             # Console summary
             summ = results.get('summary', pd.DataFrame())
@@ -1565,7 +1687,7 @@ if __name__ == "__main__":
                 except Exception:
                     return 'span'
             span_tag = f"s{_fmt_span(s_dt)}-e{_fmt_span(e_dt)}"
-            out_xlsx = os.path.join('results', f"{base_name}_{span_tag}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
+            out_xlsx = os.path.join('results', f"{asset_tag}_{base_name}_{span_tag}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
             export_backtest_xlsx(results, out_xlsx)
             print(f"Backtest report saved to: {out_xlsx}")
         except (EOFError, KeyboardInterrupt):

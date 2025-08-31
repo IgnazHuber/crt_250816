@@ -2243,9 +2243,16 @@ if __name__ == "__main__":
             if run_risk_management is None:
                 print("Module risk_position not available.")
                 raise SystemExit(0)
+            # Prompt for backtest parameters (match option g for consistency)
+            bt_params_m = backtest_prompt_params()
+            try:
+                bt_params_m.backtest_start = s_dt
+                bt_params_m.backtest_end = e_dt
+            except Exception:
+                pass
             out_xlsx = os.path.join('results', f"{asset_tag}_risk_{ts}.xlsx")
             out_html = os.path.join('results', f"{asset_tag}_risk_{ts}.html")
-            run_risk_management(df.copy(), markers_df.copy(), out_xlsx, out_html, asset_label)
+            run_risk_management(df.copy(), markers_df.copy(), out_xlsx, out_html, asset_label, params=bt_params_m)
             print(f"Saved: {out_xlsx}, {out_html}")
         elif atype == 'n':
             if run_regime_conditioning is None:

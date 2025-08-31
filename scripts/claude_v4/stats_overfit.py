@@ -71,13 +71,15 @@ def run_pbo_deflated_sharpe(df: pd.DataFrame, markers: pd.DataFrame, out_xlsx: s
                 return {'Total_PnL': 0.0, 'PF': np.nan, 'Trades': 0}
             res = run_backtest(dfx.copy(), mkx.copy(), params)
             summ = res.get('summary', pd.DataFrame())
+            tr = res.get('trades', pd.DataFrame())
+            trades_n = int(tr.shape[0]) if tr is not None else 0
             if summ is None or summ.empty:
-                return {'Total_PnL': 0.0, 'PF': np.nan, 'Trades': 0}
+                return {'Total_PnL': 0.0, 'PF': np.nan, 'Trades': trades_n}
             s = summ.iloc[0]
             return {
                 'Total_PnL': float(s.get('Total_PnL', 0.0)),
                 'PF': float(s.get('Profit_Factor', np.nan)),
-                'Trades': int(s.get('Total_Trades', 0)),
+                'Trades': trades_n if trades_n else int(s.get('Trades', 0)),
             }
 
         is_kpi = _kpis(is_df, is_mk)
@@ -115,12 +117,21 @@ def run_pbo_deflated_sharpe(df: pd.DataFrame, markers: pd.DataFrame, out_xlsx: s
     os.makedirs(os.path.dirname(out_xlsx) or '.', exist_ok=True)
     try:
         with pd.ExcelWriter(out_xlsx, engine='openpyxl') as w:
+            # Info with detected span
+            try:
+                span_start = pd.to_datetime(df_local['date']).min()
+                span_end = pd.to_datetime(df_local['date']).max()
+            except Exception:
+                span_start = None
+                span_end = None
             info = pd.DataFrame({
                 'Asset': [asset_label],
                 'Rows': [len(df_local)],
                 'Markers': [len(markers_local)],
                 'Splits': [n_splits],
                 'Embargo%': [embargo * 100.0],
+                'Span_Start': [span_start],
+                'Span_End': [span_end],
                 'Generated': [datetime.now().strftime('%Y-%m-%d %H:%M:%S')],
                 'Beschreibung_DE': ['PBO/Deflated Sharpe (Surrogat): IS/OOS-Backtests je Fold; PBO ≈ Anteil OOS < Median(IS); Spearman(IS,OOS) und OOS-μ/σ zur Robustheitsdiagnose.']
             })
@@ -138,15 +149,39 @@ def run_pbo_deflated_sharpe(df: pd.DataFrame, markers: pd.DataFrame, out_xlsx: s
         pd.DataFrame([{'PBO_surrogate': pbo_surrogate, 'Spearman_IS_OOS': corr_spear, 'Sharpe_surrogate_OOS': ds_sharpe}]).to_csv(base + '_summary.csv', index=False)
         pd.DataFrame({'Beschreibung_DE': ['PBO/DS (Surrogat): IS/OOS je Fold; PBO ≈ Anteil OOS < Median(IS); Spearman; OOS-μ/σ.']} ).to_csv(base + '_info.csv', index=False)
 
-    # Equity over time (full run for context)
+    # Equity over time (full run for context) with trade markers
     img64 = ''
     try:
         res_full = run_backtest(df_local.copy(), markers_local.copy(), params)
         eq = res_full.get('equity', pd.DataFrame())
+        tr = res_full.get('trades', pd.DataFrame())
         if eq is not None and not eq.empty:
             fig, ax = plt.subplots(figsize=(6, 2))
-            ax.plot(pd.to_datetime(eq['Date']), eq['Equity'], color='#1f77b4', lw=1.2)
-            ax.set_title('Equity über Zeit')
+            ax.plot(pd.to_datetime(eq['Date']), eq['Equity'], color='#1f77b4', lw=1.2, label='Equity')
+            try:
+                if tr is not None and not tr.empty:
+                    eq_dt = pd.to_datetime(eq['Date']).reset_index(drop=True)
+                    eq_eq = eq['Equity'].reset_index(drop=True)
+                    xs_win, ys_win, xs_loss, ys_loss = [], [], [], []
+                    for _, r in tr.iterrows():
+                        t = pd.to_datetime(r.get('Exit_Date'))
+                        if pd.isna(t):
+                            continue
+                        pos = int(np.searchsorted(eq_dt.values, t.to_datetime64(), side='right')) - 1
+                        pos = max(0, min(pos, len(eq_dt) - 1))
+                        yv = float(eq_eq.iloc[pos])
+                        if float(r.get('PnL_$', 0.0)) >= 0:
+                            xs_win.append(eq_dt.iloc[pos]); ys_win.append(yv)
+                        else:
+                            xs_loss.append(eq_dt.iloc[pos]); ys_loss.append(yv)
+                    if xs_win:
+                        ax.scatter(xs_win, ys_win, marker='^', color='#2ecc71', s=18, label='Win exits')
+                    if xs_loss:
+                        ax.scatter(xs_loss, ys_loss, marker='v', color='#e74c3c', s=18, label='Loss exits')
+            except Exception:
+                pass
+            ax.set_title('Equity über Zeit (mit Trade‑Markierungen)')
+            ax.legend(loc='best', fontsize=8)
             ax.tick_params(axis='x', labelrotation=30)
             fig.tight_layout()
             buf = io.BytesIO()
@@ -163,19 +198,25 @@ def run_pbo_deflated_sharpe(df: pd.DataFrame, markers: pd.DataFrame, out_xlsx: s
         f.write(f'<p>Asset: {asset_label} | Splits: {n_splits} | Embargo: {embargo*100:.1f}%</p>')
         f.write('<ul>')
         f.write('<li><b>Voraussetzungen:</b> Marker‑CSV in results/ (aus Optionen a–e → Marker exportieren oder DOE f); Zeitspanne auswählen.</li>')
-        f.write('<li><b>Was ist ein Fold?</b> Ein zeitlicher Abschnitt der Daten, der als Out‑of‑Sample (OOS) getestet wird, während der Rest als In‑Sample (IS) dient. Ein Embargo trennt die Bereiche, um Leckage zu vermeiden.</li>')
-        f.write('<li><b>Wofür verwenden?</b> Überprüfen, ob Leistung außerhalb der Optimations‑Region (IS) tragfähig ist. Diagnose von Überanpassung (Overfitting).</li>')
-        f.write('<li><b>Warum wichtig?</b> Konsistente OOS‑Ergebnisse deuten auf robuste Strategien hin; PBO, Spearman(IS,OOS) und OOS‑μ/σ untermauern die Einschätzung.</li>')
+        f.write('<li><b>Folds (purged):</b> Zeit wird in K nicht überlappende Abschnitte geteilt; Embargo verhindert Leckage an den Grenzen.</li>')
+        f.write('<li><b>IS (In‑Sample):</b> Für Fold k ist IS = alle Daten außerhalb k (Train/Kalibrier‑Bereich).</li>')
+        f.write('<li><b>OOS (Out‑of‑Sample):</b> Für Fold k ist OOS = nur die Daten in k (Validierungs‑Bereich).</li>')
+        f.write('<li><b>Backtests:</b> IS und OOS werden mit den jeweils passenden Markern separat gebacktestet.</li>')
+        f.write('<li><b>KPIs je Bereich:</b> Total_PnL, Profit‑Factor (PF) und Trades (Anzahl der Trades).</li>')
+        f.write('<li><b>PBO surrogate:</b> Anteil der Folds, deren OOS‑PnL unter dem Median der IS‑PnLs liegt (Heuristik für Overfitting‑Risiko).</li>')
+        f.write('<li><b>Spearman(IS,OOS):</b> Rang‑Korrelation der IS‑PnLs mit den OOS‑PnLs über Folds (Stabilität der Rangfolge).</li>')
+        f.write('<li><b>Sharpe surrogate:</b> OOS‑μ/σ der PnLs über Folds (einfache Risikoadjustierung; Richtwert).</li>')
+        f.write('<li><b>Hinweis:</b> Echte PBO/Deflated‑Sharpe erfordern mehrere konkurrierende Modelle und Rendite‑Verteilungen; die hier berichteten Größen sind diagnostische Näherungen.</li>')
         f.write('</ul>')
         if img64:
             f.write("<h4>Equity über Zeit</h4><img src='data:image/png;base64,%s' />" % img64)
         f.write('<p><b>Was ist das (DE)?</b> Für jeden Fold wird IS (alles außer Fold k) und OOS (nur Fold k) getestet. '
                 'PBO (Surrogat) ≈ Anteil der Folds, bei denen OOS‑PnL unter dem Median der IS‑PnLs liegt; '
                 'zusätzlich Spearman(IS,OOS) und ein einfacher OOS‑Sharpe (μ/σ) als Robustheitsdiagnostik.</p>')
-        f.write('<p><b>Method (surrogate, EN):</b> For each purged fold k, we backtest In‑Sample (IS) on all data except fold k and Out‑of‑Sample (OOS) on fold k. '
-                'We record Total_PnL and PF for IS and OOS. PBO surrogate is the share of folds where OOS PnL is below the median of IS PnL. '
-                'We also report Spearman rank correlation of IS vs OOS PnL and a simple OOS Sharpe surrogate μ/σ across folds. '
-                'True PBO/Deflated Sharpe require multiple competing models and return distributions; treat these as diagnostic proxies.</p>')
+        f.write('<p><b>Methode (Surrogat, DE):</b> Für jeden bereinigten Fold k wird In‑Sample (IS) auf allen Daten außer Fold k und Out‑of‑Sample (OOS) auf Fold k gebacktestet. '
+                'Es werden Total_PnL und PF jeweils für IS und OOS protokolliert. Das PBO‑Surrogat ist der Anteil der Folds, in denen der OOS‑PnL unter dem Median der IS‑PnLs liegt. '
+                'Zusätzlich berichten wir die Spearman‑Rangkorrelation zwischen IS‑ und OOS‑PnL sowie einen einfachen OOS‑Sharpe‑Surrogat μ/σ über die Folds. '
+                'Echte PBO/Deflated‑Sharpe erfordern mehrere konkurrierende Modelle und Rendite‑Verteilungen; diese Größen sind als diagnostische Proxies zu verstehen.</p>')
         if not df_folds.empty:
             f.write('<h4>Per‑Fold IS/OOS KPIs</h4>')
             df_fmt = df_folds.copy()

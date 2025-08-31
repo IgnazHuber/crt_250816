@@ -1,0 +1,32 @@
+<html><body><h3>Risk Management</h3><ul><li><b>Voraussetzungen:</b> Marker‑CSV in results/ (aus Optionen a–e → Marker exportieren oder DOE f); im Zweifel Zeitspanne einschränken.</li><li><b>Was wird analysiert?</b> Risiko‑Kennzahlen wie Risk‑of‑Ruin und Kelly‑Range (Platzhalter); später aus Trade‑Verteilung berechnet.</li><li><b>Wofür verwenden?</b> Ermitteln, welche Positionsgröße dauerhaft überlebensfähig ist und Ruinwahrscheinlichkeit klein hält.</li><li><b>Warum wichtig?</b> Eine gute Strategie kann mit falscher Positionsgröße scheitern; Risikosteuerung stabilisiert Ergebnisse.</li><li><b>Leer?</b> Wenn keine Trades/Marker vorliegen, bleiben Kennzahlen leer. Bitte zuerst Marker erzeugen und Backtest durchführen.</li><li><b>Hinweis zu Schätzungen:</b> Kelly und Ruin‑Proxy sind vereinfachte Indikatoren (Annahmen: stationäre Verteilung, unabhängige Trades); konservativ interpretieren.</li></ul><p>Asset: btc_1day_candlesticks_all</p><h4>Schätzwerte</h4><table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>Asset</th>
+      <th>Rows</th>
+      <th>Markers</th>
+      <th>Trades</th>
+      <th>Win_Rate_%</th>
+      <th>Avg_Win_$</th>
+      <th>Avg_Loss_$</th>
+      <th>Payoff_R</th>
+      <th>Kelly_Fraction</th>
+      <th>Ruin_Proxy_%(10_losses)</th>
+      <th>Beschreibung_DE</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>btc_1day_candlesticks_all</td>
+      <td>2732</td>
+      <td>315</td>
+      <td>0</td>
+      <td>None</td>
+      <td>None</td>
+      <td>None</td>
+      <td>None</td>
+      <td>None</td>
+      <td>None</td>
+      <td>Risk‑of‑Ruin &amp; Kelly (vereinfachte Schätzungen): aus Trade‑Kennzahlen abgeleitet; Ruin‑Proxy = P(10 Verlusttrades in Folge).</td>
+    </tr>
+  </tbody>
+</table><h4>Begriffe</h4><ul><li><b>Trades:</b> Anzahl abgeschlossener Trades in diesem Lauf.</li><li><b>Win_Rate_%:</b> Anteil gewinnender Trades.</li><li><b>Payoff_R:</b> Verhältnis durchschnittlicher Gewinn zu durchschnittlichem Verlust (|Avg_Loss|).</li><li><b>Kelly_Fraction:</b> Theoretisch optimale Einsatzquote (vereinfachte Formel), nur als Orientierung.</li><li><b>Ruin_Proxy_%(10_losses):</b> Wahrscheinlichkeit von 10 Verlusttrades in Folge (aus Win‑Rate abgeleitet).</li></ul><p><i>Keine Equity‑Vorschau verfügbar (keine Trades und keine Vorschau erzeugt).</i></p></body></html>

@@ -128,14 +128,38 @@ def run_execution_simulator(df: pd.DataFrame, markers: pd.DataFrame, out_xlsx: s
         with pd.ExcelWriter(out_xlsx, engine='openpyxl') as w:
             summ.to_excel(w, sheet_name='Summary', index=False)
             pd.DataFrame({'Beschreibung_DE':['Einfache Ausführungssimulation: Latenz und Limit/Stop-Einstieg (Bar-Touch) als Approximation.']}).to_excel(w, sheet_name='Info', index=False)
-    # Build equity chart
+    # Build equity chart with trade markers
     img64 = ''
     try:
         eq = results.get('equity', pd.DataFrame())
+        tr = results.get('trades', pd.DataFrame())
         if eq is not None and not eq.empty:
             fig, ax = plt.subplots(figsize=(6, 2))
-            ax.plot(pd.to_datetime(eq['Date']), eq['Equity'], color='#1f77b4', lw=1.2)
-            ax.set_title('Equity über Zeit')
+            ax.plot(pd.to_datetime(eq['Date']), eq['Equity'], color='#1f77b4', lw=1.2, label='Equity')
+            try:
+                if tr is not None and not tr.empty:
+                    eq_dt = pd.to_datetime(eq['Date']).reset_index(drop=True)
+                    eq_eq = eq['Equity'].reset_index(drop=True)
+                    xs_win, ys_win, xs_loss, ys_loss = [], [], [], []
+                    for _, r in tr.iterrows():
+                        t = pd.to_datetime(r.get('Exit_Date'))
+                        if pd.isna(t):
+                            continue
+                        pos = int(np.searchsorted(eq_dt.values, t.to_datetime64(), side='right')) - 1
+                        pos = max(0, min(pos, len(eq_dt) - 1))
+                        yv = float(eq_eq.iloc[pos])
+                        if float(r.get('PnL_$', 0.0)) >= 0:
+                            xs_win.append(eq_dt.iloc[pos]); ys_win.append(yv)
+                        else:
+                            xs_loss.append(eq_dt.iloc[pos]); ys_loss.append(yv)
+                    if xs_win:
+                        ax.scatter(xs_win, ys_win, marker='^', color='#2ecc71', s=18, label='Win exits')
+                    if xs_loss:
+                        ax.scatter(xs_loss, ys_loss, marker='v', color='#e74c3c', s=18, label='Loss exits')
+            except Exception:
+                pass
+            ax.set_title('Equity über Zeit (mit Trade‑Markierungen)')
+            ax.legend(loc='best', fontsize=8)
             ax.tick_params(axis='x', labelrotation=30)
             fig.tight_layout()
             buf = io.BytesIO()
@@ -150,12 +174,21 @@ def run_execution_simulator(df: pd.DataFrame, markers: pd.DataFrame, out_xlsx: s
         f.write(f"<h3>Execution Simulator</h3>")
         f.write('<ul>')
         f.write('<li><b>Voraussetzungen:</b> Marker‑CSV in results/ (aus Optionen a–e → Marker exportieren oder DOE f); Zeitspanne ggf. vorab einschränken.</li>')
-        f.write('<li><b>Was wird simuliert?</b> Latenz (Einstieg nach n Bars) und einfache Limit/Stop‑Einstiegslogik: Einstiegsbar muss den Preis intrabar berühren (Touch), sonst keine Füllung.</li>')
+        f.write('<li><b>Latency bars:</b> Anzahl Bars Verzögerung zwischen Signal und Orderplatzierung (größer = spätere Einstiege).</li>')
+        f.write('<li><b>Slippage%:</b> Adverser Zuschlag auf Fill‑Preis (Ein-/Ausstieg).</li>')
+        f.write('<li><b>Order model:</b> ') 
+        # Bold the selected model and list options
+        om_disp = f"<b>{order_model}</b>" if order_model in ('market','limit','stop') else order_model
+        f.write(om_disp + ' — Modelle: ')
+        f.write('<b>market</b>: sofort am nächsten Open; ')
+        f.write('limit: Fill nur bei intrabar günstigerem Tick (Touch) als Open±tick_pct; ')
+        f.write('stop: Fill nur bei intrabar ungünstigerem Tick (Touch) als Open±tick_pct.')
+        f.write('</li>')
         f.write('<li><b>Wofür verwenden?</b> Abschätzen realistischer Ausführung: geringere Füllquote, geänderte PnL/Trades im Vergleich zur idealisierten Ausführung.</li>')
-        f.write('<li><b>Warum wichtig?</b> Zeigt Robustheit der Strategie unter realistischeren Marktbedingungen (Slippage/Fees/Lattenz).</li>')
+        f.write('<li><b>Warum wichtig?</b> Zeigt Robustheit der Strategie unter realistischeren Marktbedingungen (Slippage/Fees/Latenz).</li>')
         f.write('</ul>')
         f.write(f"<p>Asset: {asset_label}</p>")
-        f.write(f"<p>Latency bars: {latency} | Slippage%: {slip_exec} | Order model: {order_model}")
+        f.write(f"<p>Latency bars: {latency} | Slippage%: {slip_exec} | Order model: {om_disp}")
         if order_model in ('limit','stop'):
             f.write(f" (tick_pct={tick_pct:.4f}) | Filtered markers: {filtered}")
         f.write("</p>")

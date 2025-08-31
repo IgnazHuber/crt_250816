@@ -29,10 +29,10 @@ def _safe_kpi_row(summ: pd.DataFrame, fold_id: int, start, end, asset_label: str
     s = summ.iloc[0]
     return {
         **row,
-        'Trades': float(s.get('Total_Trades', np.nan)),
+        'Trades': float(s.get('Trades', np.nan)),
         'Total_PnL': float(s.get('Total_PnL', np.nan)),
         'PF': float(s.get('Profit_Factor', np.nan)),
-        'MaxDD_%': float(s.get('MaxDD_%', np.nan)),
+        'MaxDD_%': float(s.get('Max_Drawdown_%', np.nan)),
         'Final_Equity': float(s.get('Final_Equity', np.nan)),
     }
 
@@ -83,7 +83,15 @@ def run_purged_wfcv(df: pd.DataFrame, markers: pd.DataFrame, out_xlsx: str, out_
             continue
         res = run_backtest(fold_df.copy(), mk.copy(), params)
         summ = res.get('summary')
-        rows.append(_safe_kpi_row(summ, i, start, end, asset_label))
+        row_kpi = _safe_kpi_row(summ, i, start, end, asset_label)
+        # Prefer actual trade count if available
+        try:
+            trc = res.get('trades', pd.DataFrame())
+            if trc is not None:
+                row_kpi['Trades'] = float(trc.shape[0])
+        except Exception:
+            pass
+        rows.append(row_kpi)
 
         # keep minimal details path for HTML
         try:
@@ -112,12 +120,20 @@ def run_purged_wfcv(df: pd.DataFrame, markers: pd.DataFrame, out_xlsx: str, out_
     try:
         with pd.ExcelWriter(out_xlsx, engine='openpyxl') as w:
             # Info
+            try:
+                span_start = pd.to_datetime(df_local['date']).min()
+                span_end = pd.to_datetime(df_local['date']).max()
+            except Exception:
+                span_start = None
+                span_end = None
             info = pd.DataFrame({
                 'Asset': [asset_label],
                 'Rows': [len(df_local)],
                 'Markers': [len(markers_local)],
                 'Splits': [n_splits],
                 'Embargo%': [embargo * 100.0],
+                'Span_Start': [span_start],
+                'Span_End': [span_end],
                 'Generated': [datetime.now().strftime('%Y-%m-%d %H:%M:%S')],
                 'Beschreibung_DE': ['Purged Walk-Forward CV: Zeitreihe in Folds mit Embargo; je Fold separater Backtest. Aggregation (μ/σ, Robust_Score) bewertet Robustheit.']
             })
@@ -132,15 +148,40 @@ def run_purged_wfcv(df: pd.DataFrame, markers: pd.DataFrame, out_xlsx: str, out_
         pd.DataFrame({'Beschreibung_DE': ['Purged WFCV: Folds mit Embargo; Aggregation μ/σ und Robust_Score.']}).to_csv(base + '_info.csv', index=False)
 
     # HTML summary
-    # Build an overall equity curve (for context)
+    # Build an overall equity curve (for context) + trade overlays
     try:
         res_full = run_backtest(df_local.copy(), markers_local.copy(), params)
         eq = res_full.get('equity', pd.DataFrame())
+        tr = res_full.get('trades', pd.DataFrame())
         img64 = ''
         if eq is not None and not eq.empty:
             fig, ax = plt.subplots(figsize=(6, 2))
-            ax.plot(pd.to_datetime(eq['Date']), eq['Equity'], color='#1f77b4', lw=1.2)
-            ax.set_title('Equity über Zeit')
+            ax.plot(pd.to_datetime(eq['Date']), eq['Equity'], color='#1f77b4', lw=1.2, label='Equity')
+            # Overlay trades at exits if available
+            try:
+                if tr is not None and not tr.empty:
+                    eq_dt = pd.to_datetime(eq['Date']).reset_index(drop=True)
+                    eq_eq = eq['Equity'].reset_index(drop=True)
+                    xs_win, ys_win, xs_loss, ys_loss = [], [], [], []
+                    for _, r in tr.iterrows():
+                        t = pd.to_datetime(r.get('Exit_Date'))
+                        if pd.isna(t):
+                            continue
+                        pos = int(np.searchsorted(eq_dt.values, t.to_datetime64(), side='right')) - 1
+                        pos = max(0, min(pos, len(eq_dt) - 1))
+                        yv = float(eq_eq.iloc[pos])
+                        if float(r.get('PnL_$', 0.0)) >= 0:
+                            xs_win.append(eq_dt.iloc[pos]); ys_win.append(yv)
+                        else:
+                            xs_loss.append(eq_dt.iloc[pos]); ys_loss.append(yv)
+                    if xs_win:
+                        ax.scatter(xs_win, ys_win, marker='^', color='#2ecc71', s=18, label='Win exits')
+                    if xs_loss:
+                        ax.scatter(xs_loss, ys_loss, marker='v', color='#e74c3c', s=18, label='Loss exits')
+            except Exception:
+                pass
+            ax.set_title('Equity über Zeit (mit Trade‑Markierungen)')
+            ax.legend(loc='best', fontsize=8)
             ax.tick_params(axis='x', labelrotation=30)
             fig.tight_layout()
             buf = io.BytesIO()
@@ -155,9 +196,12 @@ def run_purged_wfcv(df: pd.DataFrame, markers: pd.DataFrame, out_xlsx: str, out_
         f.write('<h3>Purged Walk-Forward CV (WFCV)</h3>')
         f.write('<ul>')
         f.write('<li><b>Voraussetzungen:</b> Marker‑CSV in results/ (aus Optionen a–e → Marker exportieren oder DOE f), passende Zeitspanne auswählen.</li>')
-        f.write('<li><b>Was ist ein Fold?</b> Ein zeitlicher Abschnitt (Teil der Historie), der separat validiert wird. Zwischen Folds wird ein Embargo (Sicherheitsabstand) gelassen, um Informationsleckage zu vermeiden.</li>')
-        f.write('<li><b>Wofür verwenden?</b> Robustheitsprüfung: Stabilität der Kennzahlen über Folds; Erkennen von Überanpassung.</li>')
-        f.write('<li><b>Warum wichtig?</b> Ergebnisse sind weniger verzerrt durch einmalige Marktphasen; Robust_Score (μ−λ·σ) bevorzugt stabile PnL‑Verteilung.</li>')
+        f.write('<li><b>Purged Walk‑Forward:</b> Zeit wird in zeitlich geordnete Folds geschnitten. Jeder Fold wird OOS getestet, der Rest als IS trainiert/kalibriert (hier: Backtest nur zur Validierung genutzt). Bereiche nahe den Grenzen werden per Embargo ausgeschlossen.</li>')
+        f.write('<li><b>Splits:</b> Anzahl der Folds (n_splits). Mehr Folds = feinere zeitliche Prüfung, aber weniger Daten pro Fold.</li>')
+        f.write('<li><b>Embargo:</b> Sicherheitsabstand (prozentual zum Fold), verhindert Leckage über benachbarte Beobachtungen.</li>')
+        f.write('<li><b>Robust_Score:</b> μ − λ·σ über Fold‑PnLs (λ via Env), begünstigt stabile Ergebnisse.</li>')
+        f.write('<li><b>Warum sind Trades/MaxDD% leer?</b> Wenn ein Fold keine Marker im Zeitraum enthält oder keine Trades ausgelöst werden, sind Trades=0 und abgeleitete Größen wie MaxDD% leer (n/a).</li>')
+        f.write('<li><b>MaxDD%:</b> Maximale prozentuale Equity‑Drawdown über die Equity‑Kurve eines Tests.</li>')
         f.write('</ul>')
         f.write('<p>Asset: %s | Splits: %d | Embargo: %.1f%%</p>' % (asset_label, n_splits, embargo*100))
         if img64:

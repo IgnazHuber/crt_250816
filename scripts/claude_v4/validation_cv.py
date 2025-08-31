@@ -4,6 +4,8 @@ import numpy as np
 import pandas as pd
 
 from Backtest_Divergences import BacktestParams, backtest as run_backtest
+import base64, io
+import matplotlib.pyplot as plt
 
 
 def _fold_ranges(dates: pd.Series, n_splits: int, embargo_frac: float):
@@ -116,20 +118,50 @@ def run_purged_wfcv(df: pd.DataFrame, markers: pd.DataFrame, out_xlsx: str, out_
                 'Markers': [len(markers_local)],
                 'Splits': [n_splits],
                 'Embargo%': [embargo * 100.0],
-                'Generated': [datetime.now().strftime('%Y-%m-%d %H:%M:%S')]
+                'Generated': [datetime.now().strftime('%Y-%m-%d %H:%M:%S')],
+                'Beschreibung_DE': ['Purged Walk-Forward CV: Zeitreihe in Folds mit Embargo; je Fold separater Backtest. Aggregation (μ/σ, Robust_Score) bewertet Robustheit.']
             })
             info.to_excel(w, sheet_name='Info', index=False)
             df_folds.to_excel(w, sheet_name='WFCV_Folds', index=False)
             if agg:
                 pd.DataFrame([agg]).to_excel(w, sheet_name='Aggregates', index=False)
     except Exception:
-        # Fallback CSVs
-        df_folds.to_csv(out_xlsx.replace('.xlsx', '_folds.csv'), index=False)
+        # Fallback CSVs plus kurze DE-Beschreibung
+        base = out_xlsx.replace('.xlsx', '')
+        df_folds.to_csv(base + '_folds.csv', index=False)
+        pd.DataFrame({'Beschreibung_DE': ['Purged WFCV: Folds mit Embargo; Aggregation μ/σ und Robust_Score.']}).to_csv(base + '_info.csv', index=False)
 
     # HTML summary
+    # Build an overall equity curve (for context)
+    try:
+        res_full = run_backtest(df_local.copy(), markers_local.copy(), params)
+        eq = res_full.get('equity', pd.DataFrame())
+        img64 = ''
+        if eq is not None and not eq.empty:
+            fig, ax = plt.subplots(figsize=(6, 2))
+            ax.plot(pd.to_datetime(eq['Date']), eq['Equity'], color='#1f77b4', lw=1.2)
+            ax.set_title('Equity über Zeit')
+            ax.tick_params(axis='x', labelrotation=30)
+            fig.tight_layout()
+            buf = io.BytesIO()
+            fig.savefig(buf, format='png', dpi=120)
+            plt.close(fig)
+            img64 = base64.b64encode(buf.getvalue()).decode('ascii')
+    except Exception:
+        img64 = ''
+
     with open(out_html, 'w', encoding='utf-8') as f:
         f.write('<html><head><style>table{border-collapse:collapse}td,th{border:1px solid #555;padding:4px 6px} .num{text-align:right}</style></head><body>')
         f.write('<h3>Purged Walk-Forward CV (WFCV)</h3>')
+        f.write('<ul>')
+        f.write('<li><b>Voraussetzungen:</b> Marker‑CSV in results/ (aus Optionen a–e → Marker exportieren oder DOE f), passende Zeitspanne auswählen.</li>')
+        f.write('<li><b>Was ist ein Fold?</b> Ein zeitlicher Abschnitt (Teil der Historie), der separat validiert wird. Zwischen Folds wird ein Embargo (Sicherheitsabstand) gelassen, um Informationsleckage zu vermeiden.</li>')
+        f.write('<li><b>Wofür verwenden?</b> Robustheitsprüfung: Stabilität der Kennzahlen über Folds; Erkennen von Überanpassung.</li>')
+        f.write('<li><b>Warum wichtig?</b> Ergebnisse sind weniger verzerrt durch einmalige Marktphasen; Robust_Score (μ−λ·σ) bevorzugt stabile PnL‑Verteilung.</li>')
+        f.write('</ul>')
+        f.write('<p>Asset: %s | Splits: %d | Embargo: %.1f%%</p>' % (asset_label, n_splits, embargo*100))
+        if img64:
+            f.write("<h4>Equity über Zeit</h4><img src='data:image/png;base64,%s' />" % img64)
         f.write(f'<p>Asset: {asset_label} | Splits: {n_splits} | Embargo: {embargo*100:.1f}%</p>')
         if not df_folds.empty:
             # Format numeric columns
@@ -150,6 +182,18 @@ def run_purged_wfcv(df: pd.DataFrame, markers: pd.DataFrame, out_xlsx: str, out_
                     else:
                         agg_fmt[k] = v
                 f.write(pd.DataFrame([agg_fmt]).to_html(index=False, classes='tbl', border=0))
+            # Simple PnL bar chart (per Fold)
+            try:
+                mx = float(np.nanmax(np.abs(df_folds['Total_PnL'].astype(float)))) or 1.0
+                f.write('<h4>Fold PnL (Balken)</h4><div>')
+                for _, r in df_folds.iterrows():
+                    val = float(r.get('Total_PnL', 0.0))
+                    w = int(300 * abs(val) / mx)
+                    color = '#2ecc71' if val >= 0 else '#e74c3c'
+                    f.write(f"<div>Fold {int(r['Fold'])}: <span style='display:inline-block;background:{color};height:10px;width:{w}px'></span> {val:.2f}</div>")
+                f.write('</div>')
+            except Exception:
+                pass
         else:
             f.write('<p>No folds generated.</p>')
         f.write('</body></html>')

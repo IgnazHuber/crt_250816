@@ -1,0 +1,44 @@
+Here’s a concise review of today’s changes and additions.
+
+Mainframe Updates
+
+Legend groups: Variant → Type → Direction; Classic/Hidden combined. Improves toggling and clarity in plots (Mainframe_RTv250829_mplfinance.py).
+Time span picker: Windows Forms date picker with intraday support; defaults to full span if cancelled. Console fallback maintained.
+File pickers: Single-file picker for main input and multi-select picker for secondary sweep (option i).
+Output tagging: Filenames and plot titles prefixed with detected asset_tag for consistency.
+Marker export: CSV plus enhanced XLSX (per-type sheets, Summary, grand totals).
+Plotting Improvements
+
+Variant comparison: V1/V2/V3 color scheme, plus “Additional/Missing” outline markers vs V1.
+Variant controls: Buttons to show-only or hide V1/V2/V3; proxy traces ensure clean legend groups.
+Extra panels: Optional Volume, ATR%, OBV, VWAP; adjustable row heights and informative tooltips.
+Performance: WebGL threshold for large series; RSI(30/70) and MACD(0) dotted guides.
+DOE Pipeline
+
+Parallel DOE: ProcessPoolExecutor with deterministic aggregation and timing logs.
+Facet default: 2×2 by-type heatmaps with cell text showing Classic/Hidden counts; saved to results/.
+Optional pages: Total heatmap and per-type HTML controlled by flags; consistent color scaling.
+Robust overlays: Walk-forward CV on marker counts and optional backtest KPI CV overlays (top-N + Pareto) rendered on heatmaps.
+DOE Summary XLSX: Info sheet (asset/span/config), All_Markers, per-type pivots/heatmaps, and “Delta vs baseline” matrices; backtest CV table when enabled.
+Secondary Sweep (Option i)
+
+Single/multi-asset: Interactive multi-file selection; writes combined workbook + per-asset workbooks.
+Reporting: Console top-3 summaries for single-asset and combined runs; includes Score/PnL/PF/DD/Trades/FinalEq.
+Grids: CSV defaults in secondary_sweep_ranges.csv; ENV overrides supported as documented in PROJECT_SUMMARY.md.
+New Scaffold Modules
+
+validation_cv.py: Purged walk-forward CV with embargo; outputs fold table, aggregates (μ/σ and robust score), XLSX+HTML with equity snapshot.
+execution_simulator.py: Latency (bars) + simple limit/stop “touch” entry filter; respects fee/slippage; exports XLSX and HTML summary.
+stats_overfit.py: PBO/Deflated Sharpe surrogates across folds; IS/OOS per fold, Spearman(IS,OOS), OOS μ/σ; XLSX+HTML.
+risk_position.py: Simple Kelly and “10-loss streak” ruin proxy from backtest trades; XLSX+HTML with equity snapshot.
+regime_robustness.py: Volatility-proxy scaffold (30-bar vol); preview XLSX and HTML plot.
+portfolio_layer.py: Loads multiple assets, correlation matrix, simple discrete-weight portfolio search; XLSX+HTML with heatmap and best equity.
+CSV/Config
+
+doe_parameters_example.csv: DOE grid with multiple candle/MACD pairs.
+secondary_sweep_ranges.csv: List-form parameter grids with “all” frequency (per-frequency overrides supported).
+Notable Behaviors/Notes
+
+New modules are imported with graceful fallbacks; wiring into the main menu flow appears scaffolded (no dedicated menu entries yet).
+DOE overlays and backtest CV controlled by envs like DOE_WF_SPLITS, DOE_BT_WF_SPLITS, DOE_ROBUST_LAMBDA, DOE_TOPN_OVERLAY.
+Plot HTMLs call fig.show(); confirm your environment supports opening them or rely on saved files in results/

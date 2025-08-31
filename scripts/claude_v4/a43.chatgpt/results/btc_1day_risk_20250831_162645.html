@@ -1,0 +1,30 @@
+<html><body><h3>Risk Management</h3><ul><li><b>Was wird analysiert?</b> Risiko‑Kennzahlen wie Risk‑of‑Ruin und Kelly‑Range (Platzhalter); später aus Trade‑Verteilung berechnet.</li><li><b>Wofür verwenden?</b> Ermitteln, welche Positionsgröße dauerhaft überlebensfähig ist und Ruinwahrscheinlichkeit klein hält.</li><li><b>Warum wichtig?</b> Eine gute Strategie kann mit falscher Positionsgröße scheitern; Risikosteuerung stabilisiert Ergebnisse.</li><li><b>Leer?</b> Wenn keine Trades/Marker vorliegen, bleiben Kennzahlen leer. Bitte zuerst Marker erzeugen und Backtest durchführen.</li><li><b>Hinweis zu Schätzungen:</b> Kelly und Ruin‑Proxy sind vereinfachte Indikatoren (Annahmen: stationäre Verteilung, unabhängige Trades); konservativ interpretieren.</li></ul><p>Asset: btc_1day_candlesticks_all</p><h4>Schätzwerte</h4><table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>Asset</th>
+      <th>Rows</th>
+      <th>Markers</th>
+      <th>Win_Rate_%</th>
+      <th>Avg_Win_$</th>
+      <th>Avg_Loss_$</th>
+      <th>Payoff_R</th>
+      <th>Kelly_Fraction</th>
+      <th>Ruin_Proxy_%(10_losses)</th>
+      <th>Beschreibung_DE</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>btc_1day_candlesticks_all</td>
+      <td>2732</td>
+      <td>311</td>
+      <td>None</td>
+      <td>None</td>
+      <td>None</td>
+      <td>None</td>
+      <td>None</td>
+      <td>None</td>
+      <td>Risk‑of‑Ruin &amp; Kelly (vereinfachte Schätzungen): aus Trade‑Kennzahlen abgeleitet; Ruin‑Proxy = P(10 Verlusttrades in Folge).</td>
+    </tr>
+  </tbody>
+</table></body></html>

@@ -5,6 +5,8 @@ import pandas as pd
 from scipy.stats import spearmanr
 
 from Backtest_Divergences import BacktestParams, backtest as run_backtest
+import base64, io
+import matplotlib.pyplot as plt
 
 
 def _fold_ranges(dates: pd.Series, n_splits: int, embargo_frac: float):
@@ -119,7 +121,8 @@ def run_pbo_deflated_sharpe(df: pd.DataFrame, markers: pd.DataFrame, out_xlsx: s
                 'Markers': [len(markers_local)],
                 'Splits': [n_splits],
                 'Embargo%': [embargo * 100.0],
-                'Generated': [datetime.now().strftime('%Y-%m-%d %H:%M:%S')]
+                'Generated': [datetime.now().strftime('%Y-%m-%d %H:%M:%S')],
+                'Beschreibung_DE': ['PBO/Deflated Sharpe (Surrogat): IS/OOS-Backtests je Fold; PBO ≈ Anteil OOS < Median(IS); Spearman(IS,OOS) und OOS-μ/σ zur Robustheitsdiagnose.']
             })
             info.to_excel(w, sheet_name='Info', index=False)
             df_folds.to_excel(w, sheet_name='IS_OOS_KPIs', index=False)
@@ -130,15 +133,46 @@ def run_pbo_deflated_sharpe(df: pd.DataFrame, markers: pd.DataFrame, out_xlsx: s
             }])
             summ.to_excel(w, sheet_name='Summary', index=False)
     except Exception:
-        df_folds.to_csv(out_xlsx.replace('.xlsx', '_is_oos.csv'), index=False)
-        pd.DataFrame([{'PBO_surrogate': pbo_surrogate, 'Spearman_IS_OOS': corr_spear, 'Sharpe_surrogate_OOS': ds_sharpe}]).to_csv(out_xlsx.replace('.xlsx', '_summary.csv'), index=False)
+        base = out_xlsx.replace('.xlsx', '')
+        df_folds.to_csv(base + '_is_oos.csv', index=False)
+        pd.DataFrame([{'PBO_surrogate': pbo_surrogate, 'Spearman_IS_OOS': corr_spear, 'Sharpe_surrogate_OOS': ds_sharpe}]).to_csv(base + '_summary.csv', index=False)
+        pd.DataFrame({'Beschreibung_DE': ['PBO/DS (Surrogat): IS/OOS je Fold; PBO ≈ Anteil OOS < Median(IS); Spearman; OOS-μ/σ.']} ).to_csv(base + '_info.csv', index=False)
+
+    # Equity over time (full run for context)
+    img64 = ''
+    try:
+        res_full = run_backtest(df_local.copy(), markers_local.copy(), params)
+        eq = res_full.get('equity', pd.DataFrame())
+        if eq is not None and not eq.empty:
+            fig, ax = plt.subplots(figsize=(6, 2))
+            ax.plot(pd.to_datetime(eq['Date']), eq['Equity'], color='#1f77b4', lw=1.2)
+            ax.set_title('Equity über Zeit')
+            ax.tick_params(axis='x', labelrotation=30)
+            fig.tight_layout()
+            buf = io.BytesIO()
+            fig.savefig(buf, format='png', dpi=120)
+            plt.close(fig)
+            img64 = base64.b64encode(buf.getvalue()).decode('ascii')
+    except Exception:
+        img64 = ''
 
     # HTML with explanation
     with open(out_html, 'w', encoding='utf-8') as f:
         f.write('<html><head><style>table{border-collapse:collapse}td,th{border:1px solid #555;padding:4px 6px} .num{text-align:right}</style></head><body>')
-        f.write('<h3>PBO / Deflated Sharpe (Surrogate)</h3>')
+        f.write('<h3>PBO / Deflated Sharpe (Surrogat)</h3>')
         f.write(f'<p>Asset: {asset_label} | Splits: {n_splits} | Embargo: {embargo*100:.1f}%</p>')
-        f.write('<p><b>Method (surrogate):</b> For each purged fold k, we backtest In‑Sample (IS) on all data except fold k and Out‑of‑Sample (OOS) on fold k. '
+        f.write('<ul>')
+        f.write('<li><b>Voraussetzungen:</b> Marker‑CSV in results/ (aus Optionen a–e → Marker exportieren oder DOE f); Zeitspanne auswählen.</li>')
+        f.write('<li><b>Was ist ein Fold?</b> Ein zeitlicher Abschnitt der Daten, der als Out‑of‑Sample (OOS) getestet wird, während der Rest als In‑Sample (IS) dient. Ein Embargo trennt die Bereiche, um Leckage zu vermeiden.</li>')
+        f.write('<li><b>Wofür verwenden?</b> Überprüfen, ob Leistung außerhalb der Optimations‑Region (IS) tragfähig ist. Diagnose von Überanpassung (Overfitting).</li>')
+        f.write('<li><b>Warum wichtig?</b> Konsistente OOS‑Ergebnisse deuten auf robuste Strategien hin; PBO, Spearman(IS,OOS) und OOS‑μ/σ untermauern die Einschätzung.</li>')
+        f.write('</ul>')
+        if img64:
+            f.write("<h4>Equity über Zeit</h4><img src='data:image/png;base64,%s' />" % img64)
+        f.write('<p><b>Was ist das (DE)?</b> Für jeden Fold wird IS (alles außer Fold k) und OOS (nur Fold k) getestet. '
+                'PBO (Surrogat) ≈ Anteil der Folds, bei denen OOS‑PnL unter dem Median der IS‑PnLs liegt; '
+                'zusätzlich Spearman(IS,OOS) und ein einfacher OOS‑Sharpe (μ/σ) als Robustheitsdiagnostik.</p>')
+        f.write('<p><b>Method (surrogate, EN):</b> For each purged fold k, we backtest In‑Sample (IS) on all data except fold k and Out‑of‑Sample (OOS) on fold k. '
                 'We record Total_PnL and PF for IS and OOS. PBO surrogate is the share of folds where OOS PnL is below the median of IS PnL. '
                 'We also report Spearman rank correlation of IS vs OOS PnL and a simple OOS Sharpe surrogate μ/σ across folds. '
                 'True PBO/Deflated Sharpe require multiple competing models and return distributions; treat these as diagnostic proxies.</p>')
@@ -155,4 +189,23 @@ def run_pbo_deflated_sharpe(df: pd.DataFrame, markers: pd.DataFrame, out_xlsx: s
         f.write(f"<li>Spearman(IS,OOS): {corr_spear if corr_spear is not None else 'n/a'}</li>")
         f.write(f"<li>Sharpe surrogate (OOS μ/σ): {f'{ds_sharpe:.2f}' if ds_sharpe is not None and not np.isnan(ds_sharpe) else 'n/a'}</li>")
         f.write('</ul>')
+        # Bar chart for OOS PnL
+        try:
+            if not df_folds.empty:
+                mx = float(np.nanmax(np.abs(df_folds['OOS_Total_PnL'].astype(float)))) or 1.0
+                f.write('<h4>OOS PnL (Balken)</h4><div>')
+                for _, r in df_folds.iterrows():
+                    val = float(r.get('OOS_Total_PnL', 0.0))
+                    w = int(300 * abs(val) / mx)
+                    color = '#2ecc71' if val >= 0 else '#e74c3c'
+                    f.write(f"<div>Fold {int(r['Fold'])}: <span style='display:inline-block;background:{color};height:10px;width:{w}px'></span> {val:.2f}</div>")
+                f.write('</div>')
+        except Exception:
+            pass
         f.write('</body></html>')
+
+    # Return for console summary
+    try:
+        return df_folds, {'PBO_surrogate': pbo_surrogate, 'Spearman_IS_OOS': corr_spear, 'Sharpe_surrogate_OOS': ds_sharpe}
+    except Exception:
+        return df_folds, {}

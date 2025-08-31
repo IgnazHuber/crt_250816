@@ -2,6 +2,8 @@ import os
 import pandas as pd
 import numpy as np
 from Backtest_Divergences import BacktestParams, backtest as run_backtest
+import base64, io
+import matplotlib.pyplot as plt
 
 def _apply_latency(df: pd.DataFrame, markers: pd.DataFrame, latency_bars: int) -> pd.DataFrame:
     if latency_bars <= 0:
@@ -108,6 +110,16 @@ def run_execution_simulator(df: pd.DataFrame, markers: pd.DataFrame, out_xlsx: s
     try:
         from Backtest_Divergences import export_backtest_xlsx
         export_backtest_xlsx(results, out_xlsx)
+        # Attempt to append a small Info sheet with DE description
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(out_xlsx)
+            ws = wb.create_sheet('Exec_Info')
+            ws.append(['Beschreibung_DE', 'Order_Model', 'Latency_Bars', 'Tick_Pct', 'Slippage_%'])
+            ws.append(['Einfache Ausführungssimulation: Latenz und Limit/Stop-Einstieg (Bar-Touch) als Approximation.', order_model, latency, tick_pct, slip_exec])
+            wb.save(out_xlsx)
+        except Exception:
+            pass
     except Exception:
         # Fallback: write summary only
         summ = results.get('summary', pd.DataFrame())
@@ -115,13 +127,40 @@ def run_execution_simulator(df: pd.DataFrame, markers: pd.DataFrame, out_xlsx: s
             summ = pd.DataFrame([{'Info': 'No trades or summary'}])
         with pd.ExcelWriter(out_xlsx, engine='openpyxl') as w:
             summ.to_excel(w, sheet_name='Summary', index=False)
+            pd.DataFrame({'Beschreibung_DE':['Einfache Ausführungssimulation: Latenz und Limit/Stop-Einstieg (Bar-Touch) als Approximation.']}).to_excel(w, sheet_name='Info', index=False)
+    # Build equity chart
+    img64 = ''
+    try:
+        eq = results.get('equity', pd.DataFrame())
+        if eq is not None and not eq.empty:
+            fig, ax = plt.subplots(figsize=(6, 2))
+            ax.plot(pd.to_datetime(eq['Date']), eq['Equity'], color='#1f77b4', lw=1.2)
+            ax.set_title('Equity über Zeit')
+            ax.tick_params(axis='x', labelrotation=30)
+            fig.tight_layout()
+            buf = io.BytesIO()
+            fig.savefig(buf, format='png', dpi=120)
+            plt.close(fig)
+            img64 = base64.b64encode(buf.getvalue()).decode('ascii')
+    except Exception:
+        img64 = ''
+
     with open(out_html, 'w', encoding='utf-8') as f:
         f.write("<html><body>")
-        f.write(f"<h3>Execution Simulator</h3><p>Asset: {asset_label}</p>")
+        f.write(f"<h3>Execution Simulator</h3>")
+        f.write('<ul>')
+        f.write('<li><b>Voraussetzungen:</b> Marker‑CSV in results/ (aus Optionen a–e → Marker exportieren oder DOE f); Zeitspanne ggf. vorab einschränken.</li>')
+        f.write('<li><b>Was wird simuliert?</b> Latenz (Einstieg nach n Bars) und einfache Limit/Stop‑Einstiegslogik: Einstiegsbar muss den Preis intrabar berühren (Touch), sonst keine Füllung.</li>')
+        f.write('<li><b>Wofür verwenden?</b> Abschätzen realistischer Ausführung: geringere Füllquote, geänderte PnL/Trades im Vergleich zur idealisierten Ausführung.</li>')
+        f.write('<li><b>Warum wichtig?</b> Zeigt Robustheit der Strategie unter realistischeren Marktbedingungen (Slippage/Fees/Lattenz).</li>')
+        f.write('</ul>')
+        f.write(f"<p>Asset: {asset_label}</p>")
         f.write(f"<p>Latency bars: {latency} | Slippage%: {slip_exec} | Order model: {order_model}")
         if order_model in ('limit','stop'):
             f.write(f" (tick_pct={tick_pct:.4f}) | Filtered markers: {filtered}")
         f.write("</p>")
+        if img64:
+            f.write("<h4>Equity über Zeit</h4><img src='data:image/png;base64,%s' />" % img64)
         try:
             summ = results.get('summary')
             if summ is not None and not summ.empty:
@@ -129,3 +168,15 @@ def run_execution_simulator(df: pd.DataFrame, markers: pd.DataFrame, out_xlsx: s
         except Exception:
             pass
         f.write("</body></html>")
+    # Return details for console summary
+    try:
+        return {
+            'summary': results.get('summary'),
+            'filtered': filtered,
+            'order_model': order_model,
+            'latency': latency,
+            'tick_pct': tick_pct,
+            'slippage': slip_exec,
+        }
+    except Exception:
+        return {}

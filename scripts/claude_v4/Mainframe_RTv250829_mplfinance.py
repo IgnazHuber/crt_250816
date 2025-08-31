@@ -366,12 +366,19 @@ def get_analysis_type():
         print("h: Backtest DOE markers (combine doe_markers_*.csv)")
         print("i: Secondary sweep optimizer (auto-tune)")
         print("j: Purged walk-forward CV (robust validation)")
+        print("   - Prereq: markers CSV in results/ (run a–e to export markers or DOE f); select timespan.")
         print("k: Execution simulator (fills, slippage, latency)")
+        print("   - Prereq: markers CSV in results/ (run a–e or DOE f); select timespan.")
         print("l: PBO / Deflated Sharpe (overfit tests)")
+        print("   - Prereq: markers CSV in results/ (run a–e or DOE f); select timespan.")
         print("m: Risk management (Risk-of-Ruin, Kelly range)")
+        print("   - Prereq: markers CSV in results/ (run a–e or DOE f); select timespan.")
         print("n: Regime conditioning (per-regime KPIs)")
+        print("   - Prereq: input series with 'date' and 'close'; enough history.")
         print("o: Data quality audit (gaps, anomalies)")
+        print("   - Prereq: input series with 'date' (ideally regular frequency).")
         print("p: Portfolio layer (allocation, correlation)")
+        print("   - Prereq: multiple files with 'date' and 'close'; sufficient overlap.")
         while True:
             c = input("\nEnter your choice (a-p): ").lower().strip()
             if c in list("abcdefghijklmnop"):
@@ -2132,6 +2139,16 @@ if __name__ == "__main__":
                 idx = int(sel)
                 mk_path = candidates[idx-1]
                 markers_df = pd.read_csv(mk_path)
+                # Ask for timespan and filter markers to visible range
+                try:
+                    s_dt, e_dt = select_backtest_timespan(df)
+                    if s_dt is not None and e_dt is not None and 'Date' in markers_df.columns:
+                        markers_df['Date'] = pd.to_datetime(markers_df['Date'], utc=True, errors='coerce')
+                        before = len(markers_df)
+                        markers_df = markers_df[(markers_df['Date'] >= s_dt) & (markers_df['Date'] <= e_dt)].copy()
+                        print(f"Markers after span filter: {len(markers_df)} (from {before})")
+                except Exception:
+                    pass
             except Exception as ex:
                 print(f"Failed to select/load markers: {ex}")
                 raise SystemExit(0)

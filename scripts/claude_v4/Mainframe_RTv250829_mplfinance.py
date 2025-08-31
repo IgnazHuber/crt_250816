@@ -37,6 +37,38 @@ from Backtest_Divergences import (
     backtest as run_backtest,
     export_backtest_xlsx,
 )
+from Secondary_Sweep_Optimizer import run_secondary_sweep, run_secondary_sweep_multi
+from typing import Optional
+
+# New modules (scaffolded)
+try:
+    from validation_cv import run_purged_wfcv
+except Exception:
+    run_purged_wfcv = None
+try:
+    from execution_simulator import run_execution_simulator
+except Exception:
+    run_execution_simulator = None
+try:
+    from stats_overfit import run_pbo_deflated_sharpe
+except Exception:
+    run_pbo_deflated_sharpe = None
+try:
+    from risk_position import run_risk_management
+except Exception:
+    run_risk_management = None
+try:
+    from regime_robustness import run_regime_conditioning
+except Exception:
+    run_regime_conditioning = None
+try:
+    from data_integrity import run_data_quality_audit
+except Exception:
+    run_data_quality_audit = None
+try:
+    from portfolio_layer import run_portfolio_allocation
+except Exception:
+    run_portfolio_allocation = None
 
 
 # -------------------------------------------------
@@ -231,6 +263,26 @@ def get_input_file_console():
             return default_file
 
 
+def get_multiple_input_files():
+    """Windows multi-select file picker for option i. Returns list of paths or empty list."""
+    try:
+        ps = r'''
+Add-Type -AssemblyName System.Windows.Forms
+$dlg = New-Object System.Windows.Forms.OpenFileDialog
+$dlg.Filter = "CSV/Parquet (*.csv;*.parquet)|*.csv;*.parquet|CSV (*.csv)|*.csv|Parquet (*.parquet)|*.parquet|All files (*.*)|*.*"
+$dlg.Title = "Select one or more CSV/Parquet input files"
+$dlg.InitialDirectory = "C:\Projekte\crt_250816\data\raw"
+$dlg.Multiselect = $true
+if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output ($dlg.FileNames -join "|") }
+'''
+        result = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps], capture_output=True, text=True, timeout=60)
+        if result.returncode == 0 and result.stdout:
+            return [p for p in result.stdout.strip().split('|') if p]
+    except Exception:
+        pass
+    return []
+
+
 # -------------------------------------------------
 # Parameter/Typ-Auswahl
 # -------------------------------------------------
@@ -241,7 +293,7 @@ def get_analysis_parameters():
         try:
             candle_percent = float(sys.argv[2])
             macd_percent = float(sys.argv[3]) if len(sys.argv) > 3 else 3.25
-            return candle_percent, macd_percent, None
+            return candle_percent, macd_percent, None, None
         except Exception:
             pass
 
@@ -253,8 +305,13 @@ def get_analysis_parameters():
         macd_percent = 3.25 if s == "" else float(s)
 
         print("\nOptional second variant for comparison:")
-        s1 = input("Enter second Candle tolerance % (leave empty for none): ").strip()
-        s2 = input("Enter second MACD tolerance % (leave empty for none): ").strip()
+        try:
+            c2_sugg = candle_percent * 1.2
+            m2_sugg = macd_percent * 1.2
+        except Exception:
+            c2_sugg, m2_sugg = candle_percent, macd_percent
+        s1 = input(f"Enter second Candle tolerance % (suggested: {c2_sugg:.4g}; leave empty for none): ").strip()
+        s2 = input(f"Enter second MACD tolerance % (suggested: {m2_sugg:.4g}; leave empty for none): ").strip()
 
         variant2 = None
         if s1 or s2:
@@ -266,16 +323,35 @@ def get_analysis_parameters():
                 print(f"Invalid second variant: {e}")
                 variant2 = None
 
-        return candle_percent, macd_percent, variant2
+        print("\nOptional third variant for comparison:")
+        try:
+            c3_sugg = candle_percent * 0.8
+            m3_sugg = macd_percent * 0.8
+        except Exception:
+            c3_sugg, m3_sugg = candle_percent, macd_percent
+        s3 = input(f"Enter third Candle tolerance % (suggested: {c3_sugg:.4g}; leave empty for none): ").strip()
+        s4 = input(f"Enter third MACD tolerance % (suggested: {m3_sugg:.4g}; leave empty for none): ").strip()
+
+        variant3 = None
+        if s3 or s4:
+            try:
+                c3 = float(s3) if s3 else candle_percent
+                m3 = float(s4) if s4 else macd_percent
+                variant3 = (c3, m3)
+            except Exception as e:
+                print(f"Invalid third variant: {e}")
+                variant3 = None
+
+        return candle_percent, macd_percent, variant2, variant3
     except (EOFError, KeyboardInterrupt):
-        return 0.1, 3.25, None
+        return 0.1, 3.25, None, None
 
 
 def get_analysis_type():
     import sys
     if len(sys.argv) > 1:
         c = (sys.argv[1] or "").lower().strip()
-        if c in list("abcdefg"):
+        if c in list("abcdefghijklmnop"):
             return c
 
     try:
@@ -288,11 +364,19 @@ def get_analysis_type():
         print("f: DOE (Design of Experiments)")
         print("g: Backtest markers (validate signals)")
         print("h: Backtest DOE markers (combine doe_markers_*.csv)")
+        print("i: Secondary sweep optimizer (auto-tune)")
+        print("j: Purged walk-forward CV (robust validation)")
+        print("k: Execution simulator (fills, slippage, latency)")
+        print("l: PBO / Deflated Sharpe (overfit tests)")
+        print("m: Risk management (Risk-of-Ruin, Kelly range)")
+        print("n: Regime conditioning (per-regime KPIs)")
+        print("o: Data quality audit (gaps, anomalies)")
+        print("p: Portfolio layer (allocation, correlation)")
         while True:
-            c = input("\nEnter your choice (a-h): ").lower().strip()
-            if c in list("abcdefgh"):
+            c = input("\nEnter your choice (a-p): ").lower().strip()
+            if c in list("abcdefghijklmnop"):
                 return c
-            print("Invalid choice. Please enter a, b, c, d, e, f, g, or h.")
+            print("Invalid choice. Please enter a through p.")
     except (EOFError, KeyboardInterrupt):
         return "e"
 
@@ -336,26 +420,27 @@ def generate_markers_df(df, analysis_results, candle_percent, macd_percent, asse
 
     for i in range(len(df)):
         dt = df['date'].iloc[i]
+        row = df.iloc[i]
         if analysis_results.get('CBullDivg', False):
-            if 'CBullD_gen' in df.columns and pd.notna(df.at[i, 'CBullD_gen']) and df.at[i, 'CBullD_gen'] == 1:
+            if 'CBullD_gen' in df.columns and pd.notna(row.get('CBullD_gen')) and row.get('CBullD_gen') == 1:
                 _append('CBullDivg_Classic', dt)
                 counts['CBullDivg']['classic'] += 1
-            if 'CBullD_neg_MACD' in df.columns and pd.notna(df.at[i, 'CBullD_neg_MACD']) and df.at[i, 'CBullD_neg_MACD'] == 1:
+            if 'CBullD_neg_MACD' in df.columns and pd.notna(row.get('CBullD_neg_MACD')) and row.get('CBullD_neg_MACD') == 1:
                 _append('CBullDivg_Hidden', dt)
                 counts['CBullDivg']['hidden'] += 1
         if analysis_results.get('CBullDivg_x2', False):
-            if 'CBullD_x2_gen' in df.columns and pd.notna(df.at[i, 'CBullD_x2_gen']) and df.at[i, 'CBullD_x2_gen'] == 1:
+            if 'CBullD_x2_gen' in df.columns and pd.notna(row.get('CBullD_x2_gen')) and row.get('CBullD_x2_gen') == 1:
                 _append('CBullDivg_x2_Classic', dt)
                 counts['CBullDivg_x2']['classic'] += 1
         if analysis_results.get('HBearDivg', False):
-            if 'HBearD_gen' in df.columns and pd.notna(df.at[i, 'HBearD_gen']) and df.at[i, 'HBearD_gen'] == 1:
+            if 'HBearD_gen' in df.columns and pd.notna(row.get('HBearD_gen')) and row.get('HBearD_gen') == 1:
                 _append('HBearDivg_Classic', dt)
                 counts['HBearDivg']['classic'] += 1
         if analysis_results.get('HBullDivg', False):
-            if 'HBullD_gen' in df.columns and pd.notna(df.at[i, 'HBullD_gen']) and df.at[i, 'HBullD_gen'] == 1:
+            if 'HBullD_gen' in df.columns and pd.notna(row.get('HBullD_gen')) and row.get('HBullD_gen') == 1:
                 _append('HBullDivg_Classic', dt)
                 counts['HBullDivg']['classic'] += 1
-            if 'HBullD_neg_MACD' in df.columns and pd.notna(df.at[i, 'HBullD_neg_MACD']) and df.at[i, 'HBullD_neg_MACD'] == 1:
+            if 'HBullD_neg_MACD' in df.columns and pd.notna(row.get('HBullD_neg_MACD')) and row.get('HBullD_neg_MACD') == 1:
                 _append('HBullDivg_Hidden', dt)
                 counts['HBullDivg']['hidden'] += 1
 
@@ -422,20 +507,34 @@ def _safe_get_vals(df_idx, dt):
         return np.nan, np.nan, np.nan, np.nan
 
 
-def add_markers_to_plotly(fig, df, analysis_results, variant_name):
+def add_markers_to_plotly(fig, df, analysis_results, variant_name, extra_targets=None):
     """
     Zeichnet Marker in 3 Subplots (Price/RSI/MACD).
     Legendengruppierung wie gefordert (Classic/Hidden gemeinsam).
     Rückgabe: Set aus (date, y_price) zur Varianten-Differenz.
     """
     positions = set()
+    if extra_targets is None:
+        extra_targets = []
 
-    marker_styles = {
-        'CBullDivg':    {'symbol': 'triangle-up',   'color': 'green'},
-        'CBullDivg_x2': {'symbol': 'triangle-down', 'color': 'green'},
-        'HBullDivg':    {'symbol': 'diamond',       'color': 'green'},
-        'HBearDivg':    {'symbol': 'square',        'color': 'red'}
+    # Shapes per analysis type; color is variant-level for visual consistency
+    marker_shapes = {
+        'CBullDivg':    'triangle-up',
+        'CBullDivg_x2': 'triangle-down',
+        'HBullDivg':    'diamond',
+        'HBearDivg':    'square'
     }
+
+    # Variant-level color mapping (brighter green for V1, orange for V2, bright blue for V3)
+    def _variant_color(name: str) -> str:
+        n = str(name).lower()
+        if n.startswith('v1'):
+            return '#00FF66'  # bright green
+        if n.startswith('v2'):
+            return '#FFA500'  # orange
+        if n.startswith('v3'):
+            return '#1E90FF'  # dodger blue
+        return '#FFFFFF'
 
     def _group_id(div_type, direction):
         return f"{variant_name}|{div_type}|{direction}"
@@ -445,6 +544,8 @@ def add_markers_to_plotly(fig, df, analysis_results, variant_name):
 
     def _add_proxy_legend_entry(div_type, direction):
         gid = _group_id(div_type, direction)
+        shape = marker_shapes[div_type]
+        size_px = 16 if shape.startswith('triangle') else 12
         fig.add_trace(
             go.Scatter(
                 x=[df['date'].iloc[0] if len(df) else None],
@@ -452,9 +553,10 @@ def add_markers_to_plotly(fig, df, analysis_results, variant_name):
                 mode='markers',
                 name=_proxy_name(div_type, direction),
                 marker=dict(
-                    symbol=marker_styles[div_type]['symbol'],
-                    size=12,
+                    symbol=shape,
+                    size=size_px,
                     line=dict(width=2),
+                    color=_variant_color(variant_name),
                 ),
                 visible='legendonly',
                 legendgroup=gid,
@@ -477,8 +579,8 @@ def add_markers_to_plotly(fig, df, analysis_results, variant_name):
 
     def _add_pair(dates, y_price, y_rsi, y_macd, div_type, direction, size, opacity):
         gid = _group_id(div_type, direction)
-        common_marker = dict(symbol=marker_styles[div_type]['symbol'],
-                             color=marker_styles[div_type]['color'],
+        common_marker = dict(symbol=marker_shapes[div_type],
+                             color=_variant_color(variant_name),
                              size=size, opacity=opacity, line=dict(width=2))
         # Preis
         fig.add_trace(
@@ -507,6 +609,28 @@ def add_markers_to_plotly(fig, df, analysis_results, variant_name):
                        showlegend=False),
             row=3, col=1
         )
+        # Additional panels (e.g., Volume, ATR%)
+        for tgt in (extra_targets or []):
+            try:
+                row_idx = int(tgt.get('row', 0))
+                key = str(tgt.get('key'))
+                if row_idx and key:
+                    ys = []
+                    for d in dates:
+                        try:
+                            ys.append(df_idx.loc[d].get(key, np.nan))
+                        except Exception:
+                            ys.append(np.nan)
+                    fig.add_trace(
+                        go.Scatter(x=dates, y=ys, mode='markers',
+                                   name=f"{div_type} - {direction}",
+                                   marker=common_marker,
+                                   legendgroup=gid,
+                                   showlegend=False),
+                        row=row_idx, col=1
+                    )
+            except Exception:
+                pass
 
     df_idx = df.set_index('date')
 
@@ -519,7 +643,7 @@ def add_markers_to_plotly(fig, df, analysis_results, variant_name):
             low2, _, rsi2, macd2 = _safe_get_vals(df_idx, d2)
             if pd.notna(low1) and pd.notna(low2):
                 _add_pair([d1, d2], [low1 * 0.99, low2 * 0.99], [rsi1, rsi2], [macd1, macd2],
-                          'CBullDivg', 'Bullish', size=12, opacity=1.0)
+                          'CBullDivg', 'Bullish', size=16, opacity=1.0)
                 positions.update([(d1, low1 * 0.99), (d2, low2 * 0.99)])
 
         # Hidden Bullish (neg MACD)
@@ -530,7 +654,7 @@ def add_markers_to_plotly(fig, df, analysis_results, variant_name):
             low2, _, rsi2, macd2 = _safe_get_vals(df_idx, d2)
             if pd.notna(low1) and pd.notna(low2):
                 _add_pair([d1, d2], [low1 * 0.98, low2 * 0.98], [rsi1, rsi2], [macd1, macd2],
-                          'CBullDivg', 'Bullish', size=10, opacity=0.7)
+                          'CBullDivg', 'Bullish', size=13, opacity=0.7)
                 positions.update([(d1, low1 * 0.98), (d2, low2 * 0.98)])
 
         # x2 Bullish
@@ -541,7 +665,7 @@ def add_markers_to_plotly(fig, df, analysis_results, variant_name):
             low2, _, rsi2, macd2 = _safe_get_vals(df_idx, d2)
             if pd.notna(low1) and pd.notna(low2):
                 _add_pair([d1, d2], [low1 * 0.97, low2 * 0.97], [rsi1, rsi2], [macd1, macd2],
-                          'CBullDivg_x2', 'Bullish', size=12, opacity=1.0)
+                          'CBullDivg_x2', 'Bullish', size=16, opacity=1.0)
                 positions.update([(d1, low1 * 0.97), (d2, low2 * 0.97)])
 
         # Hidden Bearish
@@ -580,11 +704,18 @@ def add_markers_to_plotly(fig, df, analysis_results, variant_name):
     return positions
 
 
-def _format_counts_box(title, counts):
-    """Erzeugt HTML-Text für eine Variante (Titel + per-Analysis-Zeilen + Variant Total)."""
+def _format_counts_box(title, counts, params=None):
+    """Erzeugt HTML-Text für eine Variante (Titel + per-Analysis-Zeilen + Variant Total + Params)."""
     if not counts:
         return ""
     lines = [f"<b>{title}</b>"]
+    if params is not None and isinstance(params, (tuple, list)) and len(params) == 2:
+        try:
+            ctol = float(params[0])
+            mtol = float(params[1])
+            lines.append(f"Params: candle={ctol}, macd={mtol}")
+        except Exception:
+            pass
     v_total = 0
     for name, d in counts.items():
         lines.append(f"{name}: C={d['classic']}, H={d['hidden']}, T={d['total']}")
@@ -593,11 +724,79 @@ def _format_counts_box(title, counts):
     return "<br>".join(lines)
 
 
-def plot_with_plotly(df_main, analysis_results, counts_main, df_var2=None, variant2_results=None, counts_var2=None, asset_label=None):
+def plot_with_plotly(df_main, analysis_results, counts_main, df_var2=None, variant2_results=None, counts_var2=None, asset_label=None,
+                     df_var3=None, variant3_results=None, counts_var3=None,
+                     params_v1=None, params_v2=None, params_v3=None):
+    # Additional asset info: Volume, ATR%, OBV, VWAP
+    # Compute ATR(14) and ATR% if possible
+    try:
+        if all(col in df_main.columns for col in ['high', 'low', 'close']):
+            prev_close = df_main['close'].shift(1)
+            tr = (df_main['high'] - df_main['low']).abs()
+            tr = np.maximum(tr, (df_main['high'] - prev_close).abs())
+            tr = np.maximum(tr, (df_main['low'] - prev_close).abs())
+            df_main['ATR_14'] = tr.rolling(14, min_periods=1).mean()
+            with np.errstate(divide='ignore', invalid='ignore'):
+                df_main['ATR_Pct'] = (df_main['ATR_14'] / df_main['close']) * 100.0
+        # OBV
+        if 'volume' in df_main.columns and 'close' in df_main.columns:
+            delta = df_main['close'].diff().fillna(0)
+            obv = (np.sign(delta).replace(0, 0) * df_main['volume']).cumsum()
+            df_main['OBV'] = obv
+        # VWAP
+        if all(col in df_main.columns for col in ['high','low','close','volume']):
+            typical = (df_main['high'] + df_main['low'] + df_main['close']) / 3.0
+            cum_pv = (typical * df_main['volume']).cumsum()
+            cum_v = df_main['volume'].cumsum().replace(0, np.nan)
+            df_main['VWAP'] = cum_pv / cum_v
+    except Exception:
+        pass
+
+    # Panels configuration (keep original top-3 heights by pixels, add extra panels below)
+    base_height_px = 1200
+    price_px, rsi_px, macd_px = int(0.4 * base_height_px), int(0.3 * base_height_px), int(0.3 * base_height_px)
+    panels = []  # list of tuples: (title, key, default_px)
+    # Volume
+    if 'volume' in df_main.columns:
+        panels.append(('Volume', 'volume', 200))
+    # ATR %
+    if 'ATR_Pct' in df_main.columns:
+        panels.append(('ATR %', 'ATR_Pct', 160))
+    # OBV (optional)
+    show_obv = str(os.getenv('SHOW_OBV', '1')).strip() not in ('0','false','False')
+    if show_obv and 'OBV' in df_main.columns:
+        panels.append(('OBV', 'OBV', 160))
+    # VWAP (optional)
+    show_vwap = str(os.getenv('SHOW_VWAP', '1')).strip() not in ('0','false','False')
+    if show_vwap and 'VWAP' in df_main.columns:
+        panels.append(('VWAP', 'VWAP', 160))
+
+    n_rows = 3 + len(panels)
+
+    # Build subplot titles with tooltip explanations using HTML title attribute
+    def _title_with_tip(title_txt, tip):
+        return f"<span title=\"{tip}\">{title_txt}</span>"
+
+    t_price = 'Price'
+    t_rsi = 'RSI'
+    t_macd = _title_with_tip('MACD Histogram', 'MACD histogram: difference between MACD and signal; positive implies bullish momentum.')
+    t_map = {'Volume': _title_with_tip('Volume', 'Trading volume per bar; green on up-close, red on down-close.'),
+             'ATR %': _title_with_tip('ATR %', 'Average True Range as percent of price: recent volatility level.'),
+             'OBV': _title_with_tip('OBV', 'On-Balance Volume: cumulative volume flow; rising OBV may confirm uptrends.'),
+             'VWAP': _title_with_tip('VWAP', 'Volume Weighted Average Price: intraday reference; price above VWAP suggests strength.')}
+
+    subplot_titles = [t_price, t_rsi, t_macd] + [t_map.get(p[0], p[0]) for p in panels]
+
+    # Compute pixel height and fractions
+    extra_px = sum(px for _, _, px in panels)
+    total_height_px = price_px + rsi_px + macd_px + extra_px
+    row_heights_px = [price_px, rsi_px, macd_px] + [px for _, _, px in panels]
+    row_heights_frac = [px / total_height_px for px in row_heights_px]
+
     fig = make_subplots(
-        rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05,
-        subplot_titles=('Price', 'RSI', 'MACD Histogram'),
-        row_heights=[0.4, 0.3, 0.3]
+        rows=n_rows, cols=1, shared_xaxes=True, vertical_spacing=0.05,
+        subplot_titles=tuple(subplot_titles),
+        row_heights=row_heights_frac
     )
 
     # Candles
@@ -610,22 +809,28 @@ def plot_with_plotly(df_main, analysis_results, counts_main, df_var2=None, varia
         row=1, col=1
     )
 
+    # Decide when to use WebGL for line traces (performance on huge datasets)
+    try:
+        gl_threshold = int(os.getenv('PLOT_GL_THRESHOLD', '20000'))
+    except Exception:
+        gl_threshold = 20000
+    use_gl = len(df_main.index) > gl_threshold
+
+    def LineTrace(x, y, name, width=1.0, opacity=0.8):
+        if use_gl:
+            return go.Scattergl(x=x, y=y, mode='lines', name=name, line=dict(width=width), opacity=opacity)
+        else:
+            return go.Scatter(x=x, y=y, mode='lines', name=name, line=dict(width=width), opacity=opacity)
+
     # EMAs (vorausgesetzt von Initialize_RSI_EMA_MACD)
     ema_defs = {'EMA_20': 'yellow', 'EMA_50': 'cyan', 'EMA_100': 'magenta', 'EMA_200': 'orange'}
     for col, _col_color in ema_defs.items():
         if col in df_main.columns:
-            fig.add_trace(
-                go.Scatter(x=df_main.index, y=df_main[col], mode='lines', name=col,
-                           line=dict(width=1), opacity=0.8),
-                row=1, col=1
-            )
+            fig.add_trace(LineTrace(df_main.index, df_main[col], col, width=1, opacity=0.8), row=1, col=1)
 
     # RSI
     if 'RSI' in df_main.columns:
-        fig.add_trace(
-            go.Scatter(x=df_main.index, y=df_main['RSI'], mode='lines', name='RSI', line=dict(width=2)),
-            row=2, col=1
-        )
+        fig.add_trace(LineTrace(df_main.index, df_main['RSI'], 'RSI', width=2, opacity=1.0), row=2, col=1)
 
     # MACD-Histogramm
     macd_vals = df_main['macd_histogram'] if 'macd_histogram' in df_main.columns else pd.Series(0, index=df_main.index)
@@ -635,14 +840,49 @@ def plot_with_plotly(df_main, analysis_results, counts_main, df_var2=None, varia
         row=3, col=1
     )
 
+    # Dotted reference lines for RSI (30/70) and MACD (0)
+    try:
+        x0 = df_main.index.min()
+        x1 = df_main.index.max()
+        fig.add_shape(type='line', xref='x', yref='y2', x0=x0, x1=x1, y0=70, y1=70,
+                      line=dict(color='#FFB74D', width=1, dash='dot'))
+        fig.add_shape(type='line', xref='x', yref='y2', x0=x0, x1=x1, y0=30, y1=30,
+                      line=dict(color='#FFB74D', width=1, dash='dot'))
+        fig.add_shape(type='line', xref='x', yref='y3', x0=x0, x1=x1, y0=0, y1=0,
+                      line=dict(color='#FFB74D', width=1, dash='dot'))
+    except Exception:
+        pass
+
+    # Map additional panels to their row indices
+    extra_targets = []
+    base_row = 3
+    for idx, (title, key, _px) in enumerate(panels, start=1):
+        row_i = base_row + idx
+        if key == 'volume':
+            try:
+                up = (df_main['close'] >= df_main['close'].shift(1)).fillna(True)
+                vol_colors = np.where(up, '#2ECC71', '#E74C3C')
+            except Exception:
+                vol_colors = '#888888'
+            fig.add_trace(go.Bar(x=df_main.index, y=df_main['volume'], name='Volume', marker_color=vol_colors), row=row_i, col=1)
+        else:
+            fig.add_trace(LineTrace(df_main.index, df_main[key], title, width=1.2, opacity=0.9), row=row_i, col=1)
+        extra_targets.append({'row': row_i, 'key': key})
+
     # Marker (Variante 1)
     df_m_for_markers = df_main.reset_index().rename(columns={'index': 'date'})
-    main_positions = add_markers_to_plotly(fig, df_m_for_markers, analysis_results, 'V1 (Main)')
+    _start_v1 = len(fig.data)
+    main_positions = add_markers_to_plotly(fig, df_m_for_markers, analysis_results, 'V1 (Main)', extra_targets=extra_targets)
+    _end_v1 = len(fig.data)
+    _variant_indices = {'V1': list(range(_start_v1, _end_v1)), 'V2': [], 'V3': []}
 
     # Marker (Variante 2) + Vergleich Outlines
     if df_var2 is not None and variant2_results is not None:
         df_v2_for_markers = df_var2.reset_index().rename(columns={'index': 'date'})
-        v2_positions = add_markers_to_plotly(fig, df_v2_for_markers, variant2_results, 'V2 (Variant)')
+        _start_v2 = len(fig.data)
+        v2_positions = add_markers_to_plotly(fig, df_v2_for_markers, variant2_results, 'V2 (Variant)', extra_targets=extra_targets)
+        _end_v2 = len(fig.data)
+        _variant_indices['V2'].extend(range(_start_v2, _end_v2))
 
         additional = v2_positions - main_positions
         missing = main_positions - v2_positions
@@ -654,7 +894,7 @@ def plot_with_plotly(df_main, analysis_results, counts_main, df_var2=None, varia
             rsi_vals = [df_m_for_markers.set_index('date').get('RSI', pd.Series(dtype=float)).get(d, np.nan) for d in dates]
             macd_vals_local = [df_m_for_markers.set_index('date').get('macd_histogram', pd.Series(dtype=float)).get(d, np.nan) for d in dates]
 
-            mk = dict(symbol='circle-open', color=color, size=18, line=dict(width=1.5))
+            mk = dict(symbol='circle-open', color=color, size=18, line=dict(width=2.25))  # +50% outline width
             # Preis
             fig.add_trace(go.Scatter(x=list(dates), y=list(prices), mode='markers',
                                      name=name, marker=mk,
@@ -675,8 +915,28 @@ def plot_with_plotly(df_main, analysis_results, counts_main, df_var2=None, varia
                                      showlegend=False),
                           row=3, col=1)
 
+        _start_v2o = len(fig.data)
         _add_outline(additional, 'V2 Additional', 'yellow')
-        _add_outline(missing, 'V2 Missing', 'blue')
+        _add_outline(missing, 'V2 Missing', '#33CCFF')  # brighter blue
+        _end_v2o = len(fig.data)
+        _variant_indices['V2'].extend(range(_start_v2o, _end_v2o))
+
+    # Marker (Variante 3) + Vergleich Outlines (vs V1 only)
+    if df_var3 is not None and variant3_results is not None:
+        df_v3_for_markers = df_var3.reset_index().rename(columns={'index': 'date'})
+        _start_v3 = len(fig.data)
+        v3_positions = add_markers_to_plotly(fig, df_v3_for_markers, variant3_results, 'V3 (Variant 3)', extra_targets=extra_targets)
+        _end_v3 = len(fig.data)
+        _variant_indices['V3'].extend(range(_start_v3, _end_v3))
+
+        additional3 = v3_positions - main_positions
+        missing3 = main_positions - v3_positions
+
+        _start_v3o = len(fig.data)
+        _add_outline(additional3, 'V3 Additional', 'yellow')
+        _add_outline(missing3, 'V3 Missing', '#33CCFF')  # brighter blue
+        _end_v3o = len(fig.data)
+        _variant_indices['V3'].extend(range(_start_v3o, _end_v3o))
 
     # Layout/Legend
     title_txt = 'Technical Analysis with Divergence Markers'
@@ -691,23 +951,161 @@ def plot_with_plotly(df_main, analysis_results, counts_main, df_var2=None, varia
             groupclick='togglegroup',  # Gruppe (Classic+Hidden) gemeinsam toggeln
             itemclick='toggle'
         ),
-        height=1200
+        height=1200,
+        uirevision='const',
+        hoverdistance=20,
+        dragmode='pan'
     )
     fig.update_yaxes(title_text="Price", row=1, col=1)
-    fig.update_yaxes(title_text="RSI", range=[0, 100], row=2, col=1)
-    fig.update_yaxes(title_text="MACD", row=3, col=1)
+    # Auto-rescale for all plots under candlestick
+    fig.update_yaxes(title_text="RSI", autorange=True, rangemode='normal', row=2, col=1)
+    fig.update_yaxes(title_text="MACD", autorange=True, rangemode='normal', row=3, col=1)
+    # Set y-axis titles for extra panels
+    for idx, (title, key, _px) in enumerate(panels, start=1):
+        fig.update_yaxes(title_text=title, row=3+idx, col=1, autorange=True, rangemode='normal')
+
+    # Set total height to preserve top-3 pixel heights and add extra panels
+    fig.update_layout(height=total_height_px)
+
+    # ======= Variant-level visibility controls (additional grouping) =======
+    try:
+        n_traces = len(fig.data)
+        vis_all = [True] * n_traces
+        def _mask_only(keys):
+            # Keep non-variant baseline traces visible; hide other variants
+            mask = [True] * n_traces
+            for k, idxs in _variant_indices.items():
+                if k not in keys:
+                    for idx in idxs:
+                        if 0 <= idx < n_traces:
+                            mask[idx] = False
+            return mask
+        def _mask_hide(keys):
+            mask = [True] * n_traces
+            for k in keys:
+                for idx in _variant_indices.get(k, []):
+                    if 0 <= idx < n_traces:
+                        mask[idx] = False
+            return mask
+
+        buttons = [
+            dict(label='Show All', method='update', args=[{ 'visible': vis_all }]),
+        ]
+        # Only-V buttons
+        buttons.append(dict(label='Only V1', method='update', args=[{ 'visible': _mask_only(['V1']) }]))
+        buttons.append(dict(label='Only V2', method='update', args=[{ 'visible': _mask_only(['V2']) }]))
+        buttons.append(dict(label='Only V3', method='update', args=[{ 'visible': _mask_only(['V3']) }]))
+        # Hide-V buttons
+        buttons.append(dict(label='Hide V1', method='update', args=[{ 'visible': _mask_hide(['V1']) }]))
+        buttons.append(dict(label='Hide V2', method='update', args=[{ 'visible': _mask_hide(['V2']) }]))
+        buttons.append(dict(label='Hide V3', method='update', args=[{ 'visible': _mask_hide(['V3']) }]))
+
+        # Build extended hover relayout args: x-unified, full names, spikelines on all axes
+        extended_args = {'hovermode': 'x unified', 'hoverlabel.namelength': -1, 'spikedistance': -1}
+        for i in range(1, n_rows + 1):
+            key = '' if i == 1 else str(i)
+            extended_args[f'xaxis{key}.showspikes'] = True
+            extended_args[f'yaxis{key}.showspikes'] = True
+            extended_args[f'yaxis{key}.spikemode'] = 'across'
+        hover_buttons = [
+            dict(label='No hover', method='relayout', args=[{'hovermode': False}]),
+            dict(label='Simple hover', method='relayout', args=[{'hovermode': 'x'}]),
+            dict(label='Extended hover', method='relayout', args=[extended_args]),
+        ]
+
+        # Determine info annotation index (added last)
+        info_idx = None
+        try:
+            if fig.layout.annotations is not None:
+                info_idx = len(fig.layout.annotations) - 1
+        except Exception:
+            info_idx = None
+
+        # Defer adding updatemenus until after annotations are created
+    except Exception:
+        pass
 
     # ======= Zählerbox (für alle vorhandenen Varianten) =======
     box_parts = []
-    box_parts.append(_format_counts_box("V1 (Main)", counts_main))
+    box_parts.append(_format_counts_box("V1 (Main)", counts_main, params_v1))
     if counts_var2:
-        box_parts.append(_format_counts_box("V2 (Variant)", counts_var2))
+        box_parts.append(_format_counts_box("V2 (Variant)", counts_var2, params_v2))
+    if counts_var3:
+        box_parts.append(_format_counts_box("V3 (Variant 3)", counts_var3, params_v3))
     box_text = "<br><br>".join([p for p in box_parts if p])
 
     if box_text:
         fig.add_annotation(text=box_text, align='left', showarrow=False,
                            xref='paper', yref='paper', x=0.01, y=0.99,
                            bgcolor="rgba(0,0,0,0.7)", bordercolor="white", borderwidth=1)
+
+    # ======= Explanatory textbox under legend =======
+    info_lines = [
+        "RSI: momentum oscillator 0–100; >70 overbought, <30 oversold.",
+        "MACD Histogram: MACD minus signal; positive = bullish momentum.",
+        "Volume: traded units per bar; green up-close, red down-close.",
+        "ATR%: Average True Range / close ×100; recent volatility.",
+        "OBV: cumulative sign of close-change × volume; trend confirmation.",
+        "VWAP: volume-weighted average price; price above VWAP suggests strength.",
+    ]
+    info_text = "<br>".join(info_lines)
+    fig.add_annotation(text=info_text, align='left', showarrow=False,
+                       xref='paper', yref='paper', x=0.995, y=0.88,
+                       xanchor='right',
+                       bgcolor="rgba(0,0,0,0.6)", bordercolor="white", borderwidth=1,
+                       font=dict(size=12))
+
+    # Now that all annotations are added, build/update updatemenus with correct info index
+    try:
+        info_idx = None
+        if fig.layout.annotations is not None:
+            info_idx = len(fig.layout.annotations) - 1
+
+        hover_buttons = [
+            dict(label='No hover', method='relayout', args=[{'hovermode': False}]),
+            dict(label='Simple hover', method='relayout', args=[{'hovermode': 'x'}]),
+            dict(label='Extended hover', method='relayout', args=[extended_args]),
+        ]
+
+        # Build relayout args to autorange all y-axes (per-panel) to current visible data
+        rescale_args = {}
+        for i in range(1, n_rows + 1):
+            key = '' if i == 1 else str(i)
+            rescale_args[f'yaxis{key}.range'] = None
+            rescale_args[f'yaxis{key}.autorange'] = True
+
+        fig.update_layout(
+            updatemenus=[
+                dict(
+                    type='buttons', direction='right',
+                    x=0.02, xanchor='left', y=1.12, yanchor='top',
+                    buttons=buttons, pad=dict(r=5, t=2), showactive=False,
+                ),
+                dict(
+                    type='buttons', direction='left',
+                    x=0.62, xanchor='center', y=1.12, yanchor='top',
+                    buttons=hover_buttons, pad=dict(r=5, t=2), showactive=False,
+                ),
+                dict(
+                    type='buttons', direction='left',
+                    x=0.86, xanchor='right', y=1.12, yanchor='top',
+                    buttons=(
+                        [
+                            dict(label='Show Info', method='relayout', args=[{f'annotations[{info_idx}].opacity': 1.0}]),
+                            dict(label='Hide Info', method='relayout', args=[{f'annotations[{info_idx}].opacity': 0.0}])
+                        ] if (info_idx is not None and info_idx >= 0) else []
+                    ), pad=dict(r=5, t=2), showactive=False,
+                ),
+                dict(
+                    type='buttons', direction='left',
+                    x=0.98, xanchor='right', y=1.12, yanchor='top',
+                    buttons=[dict(label='Rescale Y', method='relayout', args=[rescale_args])],
+                    pad=dict(r=5, t=2), showactive=False,
+                ),
+            ]
+        )
+    except Exception:
+        pass
 
     # speichern & anzeigen
     os.makedirs('results', exist_ok=True)
@@ -1489,9 +1887,9 @@ if __name__ == "__main__":
 
     atype = get_analysis_type()
 
-    # Parameter nur, wenn nicht DOE
-    if atype not in ('f', 'g', 'h'):
-        candle_percent, macd_percent, variant2 = get_analysis_parameters()
+    # Parameter only for direct analyses (a–e)
+    if atype in ('a', 'b', 'c', 'd', 'e'):
+        candle_percent, macd_percent, variant2, variant3 = get_analysis_parameters()
 
     print(f"Loading data from: {path}")
     if path.lower().endswith('.parquet'):
@@ -1542,7 +1940,7 @@ if __name__ == "__main__":
 
     window = 5
 
-    if atype not in ('f', 'g', 'h'):
+    if atype in ('a', 'b', 'c', 'd', 'e'):
         print(f"Running analysis with parameters: window={window}, candle_tol={candle_percent}, macd_tol={macd_percent}")
         analysis_results = run_analysis(df, atype, window, candle_percent, macd_percent)
         out_csv = f"markers_output_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
@@ -1551,6 +1949,9 @@ if __name__ == "__main__":
         df2 = None
         res2 = None
         counts2 = None
+        df3 = None
+        res3 = None
+        counts3 = None
         if variant2:
             print(f"\nRunning second variant: candle={variant2[0]}, macd={variant2[1]}")
             df2 = df.copy()
@@ -1558,16 +1959,33 @@ if __name__ == "__main__":
             out_csv2 = f"variant2_{variant2[0]}_{variant2[1]}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
             counts2 = export_markers_to_csv(df2, out_csv2, res2, variant2[0], variant2[1], asset_tag=asset_tag)
 
+        if variant3:
+            print(f"\nRunning third variant: candle={variant3[0]}, macd={variant3[1]}")
+            df3 = df.copy()
+            res3 = run_analysis(df3, atype, window, variant3[0], variant3[1])
+            out_csv3 = f"variant3_{variant3[0]}_{variant3[1]}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            counts3 = export_markers_to_csv(df3, out_csv3, res3, variant3[0], variant3[1], asset_tag=asset_tag)
+
         # Plot (Index auf 'date')
         df = df.set_index('date')
         if df2 is not None:
             df2 = df2.set_index('date')
-        plot_with_plotly(df, analysis_results, counts, df2, res2, counts2, asset_label=asset_label)
+        if df3 is not None:
+            df3 = df3.set_index('date')
+        plot_with_plotly(
+            df, analysis_results, counts,
+            df2, res2, counts2,
+            asset_label=asset_label,
+            df_var3=df3, variant3_results=res3, counts_var3=counts3,
+            params_v1=(candle_percent, macd_percent),
+            params_v2=(variant2[0], variant2[1]) if variant2 else None,
+            params_v3=(variant3[0], variant3[1]) if variant3 else None,
+        )
 
     elif atype == 'f':
         # Deine Vorgabe: NUR 2×2-HTML mit allen vier Divergenztypen
         run_doe_analysis(df, make_total=False, make_single=False, asset_label=asset_label)
-    else:
+    elif atype in ('g','h'):
         # Backtesting path
         # Collect markers CSVs from results folder
         try:
@@ -1692,3 +2110,243 @@ if __name__ == "__main__":
             print(f"Backtest report saved to: {out_xlsx}")
         except (EOFError, KeyboardInterrupt):
             print("Backtest cancelled by user.")
+    elif atype in ('j','k','l','m','n','o','p'):
+        # New scaffolded options: minimal integration hooks
+        os.makedirs('results', exist_ok=True)
+        # Load markers when needed
+        markers_df = None
+        if atype in ('j','k','l','m'):
+            try:
+                candidates = []
+                for fn in os.listdir('results'):
+                    if fn.lower().endswith('.csv') and 'markers' in fn.lower():
+                        candidates.append(os.path.join('results', fn))
+                candidates.sort()
+                if not candidates:
+                    print("No markers CSV found in results/. Please run an analysis first.")
+                    raise SystemExit(0)
+                print("\nAvailable markers CSV files in results/:")
+                for i, pth in enumerate(candidates, 1):
+                    print(f"{i}: {os.path.basename(pth)}")
+                sel = input("Select file number: ").strip()
+                idx = int(sel)
+                mk_path = candidates[idx-1]
+                markers_df = pd.read_csv(mk_path)
+            except Exception as ex:
+                print(f"Failed to select/load markers: {ex}")
+                raise SystemExit(0)
+        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+        if atype == 'j':
+            if run_purged_wfcv is None:
+                print("Module validation_cv not available.")
+                raise SystemExit(0)
+            out_xlsx = os.path.join('results', f"{asset_tag}_wfcv_{ts}.xlsx")
+            out_html = os.path.join('results', f"{asset_tag}_wfcv_{ts}.html")
+            ret = run_purged_wfcv(df.copy(), markers_df.copy(), out_xlsx, out_html, asset_label)
+            # If module returned folds/agg, echo compact console summary
+            try:
+                if isinstance(ret, tuple) and len(ret) == 2:
+                    folds, agg = ret
+                    if folds is not None and not folds.empty:
+                        top = min(3, len(folds))
+                        print(f"\nTop {top} folds by PnL:")
+                        tmp = folds.sort_values('Total_PnL', ascending=False).head(top)
+                        for _, r in tmp.iterrows():
+                            print(f"Fold {int(r['Fold'])}: Trades={int(r.get('Trades',0))}, PnL={r.get('Total_PnL',0.0):.2f}, PF={r.get('PF',np.nan):.2f}")
+                    if agg:
+                        rs = agg.get('Robust_Score', None)
+                        if rs is not None:
+                            print(f"Robust Score: {rs:.2f}")
+            except Exception:
+                pass
+            print(f"Saved: {out_xlsx}, {out_html}")
+        elif atype == 'k':
+            if run_execution_simulator is None:
+                print("Module execution_simulator not available.")
+                raise SystemExit(0)
+            # Prompt for execution model parameters (override envs if provided)
+            try:
+                print("\nExecution model parameters (press Enter to keep defaults/env):")
+                mdl = input("Order model [market|limit|stop] (default: market): ").strip().lower()
+                if mdl in ('market','limit','stop'):
+                    os.environ['EXEC_ORDER_MODEL'] = mdl
+                lat = input("Latency bars (default from EXEC_LATENCY_BARS or 0): ").strip()
+                if lat:
+                    os.environ['EXEC_LATENCY_BARS'] = lat
+                if mdl in ('limit','stop'):
+                    tp = input("tick_pct (e.g. 0.001 = 0.1%, default from EXEC_TICK_PCT or 0.001): ").strip()
+                    if tp:
+                        os.environ['EXEC_TICK_PCT'] = tp
+                sl = input("Slippage % (default from EXEC_SLIPPAGE_PCT or BT_SLIPPAGE_PCT): ").strip()
+                if sl:
+                    os.environ['EXEC_SLIPPAGE_PCT'] = sl
+            except Exception:
+                pass
+            out_xlsx = os.path.join('results', f"{asset_tag}_execsim_{ts}.xlsx")
+            out_html = os.path.join('results', f"{asset_tag}_execsim_{ts}.html")
+            ret = run_execution_simulator(df.copy(), markers_df.copy(), out_xlsx, out_html, asset_label)
+            # Console summary (short KPI lines)
+            try:
+                if isinstance(ret, dict):
+                    summ = ret.get('summary')
+                    filtered = ret.get('filtered')
+                    om = ret.get('order_model'); lat = ret.get('latency'); tp = ret.get('tick_pct'); slp = ret.get('slippage')
+                    print(f"Execution: model={om}, latency={lat}, tick_pct={tp}, slippage%={slp}")
+                    if summ is not None and not summ.empty:
+                        s = summ.iloc[0]
+                        print(f"Trades={int(s.get('Total_Trades',0))} | PnL={float(s.get('Total_PnL',0.0)):.2f} | PF={float(s.get('Profit_Factor',0.0)):.2f} | MaxDD%={float(s.get('MaxDD_%',0.0)):.2f}")
+                    if filtered is not None:
+                        print(f"Markers filtered by entry condition: {filtered}")
+            except Exception:
+                pass
+            print(f"Saved: {out_xlsx}, {out_html}")
+        elif atype == 'l':
+            if run_pbo_deflated_sharpe is None:
+                print("Module stats_overfit not available.")
+                raise SystemExit(0)
+            out_xlsx = os.path.join('results', f"{asset_tag}_pbo_{ts}.xlsx")
+            out_html = os.path.join('results', f"{asset_tag}_pbo_{ts}.html")
+            ret = run_pbo_deflated_sharpe(df.copy(), markers_df.copy(), out_xlsx, out_html, asset_label)
+            # Console summary
+            try:
+                if isinstance(ret, tuple) and len(ret) == 2:
+                    folds, summ = ret
+                    if isinstance(summ, dict):
+                        print(f"PBO_surrogate={summ.get('PBO_surrogate')} | Spearman(IS,OOS)={summ.get('Spearman_IS_OOS')} | Sharpe_surrogate_OOS={summ.get('Sharpe_surrogate_OOS')}")
+                    if folds is not None and not folds.empty:
+                        top = min(3, len(folds))
+                        tmp = folds.sort_values('OOS_Total_PnL', ascending=False).head(top)
+                        print(f"Top {top} OOS folds by PnL:")
+                        for _, r in tmp.iterrows():
+                            print(f"Fold {int(r['Fold'])}: OOS Trades={int(r.get('OOS_Trades',0))}, OOS PnL={r.get('OOS_Total_PnL',0.0):.2f}, OOS PF={r.get('OOS_PF',np.nan):.2f}")
+            except Exception:
+                pass
+            print(f"Saved: {out_xlsx}, {out_html}")
+        elif atype == 'm':
+            if run_risk_management is None:
+                print("Module risk_position not available.")
+                raise SystemExit(0)
+            out_xlsx = os.path.join('results', f"{asset_tag}_risk_{ts}.xlsx")
+            out_html = os.path.join('results', f"{asset_tag}_risk_{ts}.html")
+            run_risk_management(df.copy(), markers_df.copy(), out_xlsx, out_html, asset_label)
+            print(f"Saved: {out_xlsx}, {out_html}")
+        elif atype == 'n':
+            if run_regime_conditioning is None:
+                print("Module regime_robustness not available.")
+                raise SystemExit(0)
+            out_xlsx = os.path.join('results', f"{asset_tag}_regimes_{ts}.xlsx")
+            out_html = os.path.join('results', f"{asset_tag}_regimes_{ts}.html")
+            run_regime_conditioning(df.copy(), out_xlsx, out_html, asset_label)
+            print(f"Saved: {out_xlsx}, {out_html}")
+        elif atype == 'o':
+            if run_data_quality_audit is None:
+                print("Module data_integrity not available.")
+                raise SystemExit(0)
+            out_xlsx = os.path.join('results', f"{asset_tag}_data_audit_{ts}.xlsx")
+            out_html = os.path.join('results', f"{asset_tag}_data_audit_{ts}.html")
+            run_data_quality_audit(df.copy(), out_xlsx, out_html, asset_label)
+            print(f"Saved: {out_xlsx}, {out_html}")
+        elif atype == 'p':
+            if run_portfolio_allocation is None:
+                print("Module portfolio_layer not available.")
+                raise SystemExit(0)
+            paths = get_multiple_input_files()
+            if not paths:
+                print("No files selected.")
+                raise SystemExit(0)
+            out_xlsx = os.path.join('results', f"portfolio_{ts}.xlsx")
+            out_html = os.path.join('results', f"portfolio_{ts}.html")
+            run_portfolio_allocation(paths, out_xlsx, out_html)
+            print(f"Saved: {out_xlsx}, {out_html}")
+    else:
+        # Secondary sweep optimizer (auto-tune)
+        try:
+            # Multi-asset mode via env: SS_ASSETS (comma/semicolon separated) or SS_ASSETS_GLOB
+            assets_env = os.getenv('SS_ASSETS', '').strip()
+            assets_glob = os.getenv('SS_ASSETS_GLOB', '').strip()
+            span_start = os.getenv('SS_SPAN_START', '').strip() or None
+            span_end = os.getenv('SS_SPAN_END', '').strip() or None
+            if assets_env or assets_glob:
+                assets = []
+                if assets_env:
+                    for part in assets_env.replace(';', ',').split(','):
+                        part = part.strip()
+                        if not part:
+                            continue
+                        assets.append(part)
+                if assets_glob:
+                    import glob as _glob
+                    assets.extend(_glob.glob(assets_glob))
+                assets = [a for a in assets if a]
+                if not assets:
+                    print('No assets resolved from SS_ASSETS/SS_ASSETS_GLOB.')
+                else:
+                    out = run_secondary_sweep_multi(assets, span_start, span_end, doe_params_file="doe_parameters_example.csv")
+                    if out:
+                        print(f"Combined secondary sweep finished: {out}")
+                        # Print top-3 assets by score
+                        try:
+                            if out.endswith('.xlsx') and _HAS_XLSX:
+                                df_best = pd.read_excel(out, sheet_name='Best_By_Asset')
+                            else:
+                                df_best = pd.read_csv(out.replace('.xlsx', '.csv'))
+                            if not df_best.empty:
+                                df_best = df_best.sort_values('Score', ascending=False).head(3)
+                                print("\nTop 3 assets by robust score:")
+                                for _, row in df_best.iterrows():
+                                    print(f"{row.get('Asset_Tag')} | Score={row.get('Score'):.2f}, PnL={row.get('Mean_PnL'):.2f}, PF={row.get('Mean_PF'):.2f}, DD%={row.get('Mean_MaxDD_%'):.2f}, FinalEq={row.get('Mean_Final_Equity', np.nan)}")
+                        except Exception:
+                            pass
+            else:
+                s_dt, e_dt = select_backtest_timespan(df)
+                if s_dt and e_dt:
+                    print(f"Selected backtest span: {s_dt} to {e_dt}")
+                    before = len(df)
+                    df = df[(df['date'] >= s_dt) & (df['date'] <= e_dt)].reset_index(drop=True)
+                    print(f"Rows after span filter: {len(df)} (from {before})")
+                else:
+                    s_dt = pd.to_datetime(df['date']).min(); e_dt = pd.to_datetime(df['date']).max()
+                # Ask if user wants to select multiple assets interactively
+                try:
+                    multi = input("Select multiple assets for optimizer? (y/N): ").strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    multi = 'n'
+                if multi in ('y','yes','true','1'):
+                    files = get_multiple_input_files()
+                    if files:
+                        out = run_secondary_sweep_multi(files, str(s_dt), str(e_dt), doe_params_file="doe_parameters_example.csv")
+                        if out:
+                            print(f"Combined secondary sweep finished: {out}")
+                    else:
+                        print("No files selected; running single-asset sweep.")
+                        report = run_secondary_sweep(df.copy(), asset_label, asset_tag, s_dt, e_dt, doe_params_file="doe_parameters_example.csv")
+                        if report:
+                            print(f"Secondary sweep finished: {report}")
+                            try:
+                                if report.endswith('.xlsx') and _HAS_XLSX:
+                                    df_top = pd.read_excel(report, sheet_name='Overview').head(3)
+                                else:
+                                    df_top = pd.read_csv(report.replace('.xlsx', '.csv')).head(3)
+                                if not df_top.empty:
+                                    print("\nTop 3 parameter sets:")
+                                    for _, row in df_top.iterrows():
+                                        print(f"candle={row.get('Candle_Percent')}, macd={row.get('MACD_Percent')}, risk={row.get('Risk_%')}%, stop={row.get('Stop_%')}%, tp={row.get('TP_%')}% | Score={row.get('Score'):.2f}, PnL={row.get('Mean_PnL'):.2f}, PF={row.get('Mean_PF'):.2f}, DD%={row.get('Mean_MaxDD_%'):.2f}, Trades={row.get('Mean_Trades'):.0f}, FinalEq={row.get('Mean_Final_Equity'):.2f}")
+                            except Exception:
+                                pass
+                else:
+                    report = run_secondary_sweep(df.copy(), asset_label, asset_tag, s_dt, e_dt, doe_params_file="doe_parameters_example.csv")
+                    if report:
+                        print(f"Secondary sweep finished: {report}")
+                        try:
+                            if report.endswith('.xlsx') and _HAS_XLSX:
+                                df_top = pd.read_excel(report, sheet_name='Overview').head(3)
+                            else:
+                                df_top = pd.read_csv(report.replace('.xlsx', '.csv')).head(3)
+                            if not df_top.empty:
+                                print("\nTop 3 parameter sets:")
+                                for _, row in df_top.iterrows():
+                                    print(f"candle={row.get('Candle_Percent')}, macd={row.get('MACD_Percent')}, risk={row.get('Risk_%')}%, stop={row.get('Stop_%')}%, tp={row.get('TP_%')}% | Score={row.get('Score'):.2f}, PnL={row.get('Mean_PnL'):.2f}, PF={row.get('Mean_PF'):.2f}, DD%={row.get('Mean_MaxDD_%'):.2f}, Trades={row.get('Mean_Trades'):.0f}, FinalEq={row.get('Mean_Final_Equity'):.2f}")
+                        except Exception:
+                            pass
+        except (EOFError, KeyboardInterrupt):
+            print("Secondary sweep cancelled by user.")

@@ -389,6 +389,34 @@ def get_analysis_type():
 
 
 # -------------------------------------------------
+# Fast-Viewer Auswahl (interaktive Option)
+# -------------------------------------------------
+def _prompt_fastviz_backend():
+    """Interactive picker for fast visualization backend. Returns backend key or ''.
+    Options: none, plotly_resampler, hvplot, finplot.
+    """
+    try:
+        print("\nFast-Viewer (optional):")
+        print("0: Keiner (nur Standard Plotly/HTML)")
+        print("1: plotly-resampler (schnelles HTML)")
+        print("2: hvplot + datashader (schnelles HTML)")
+        print("3: finplot (Fenster - sehr schnell)")
+        while True:
+            c = input("Auswahl (0-3, Enter=0): ").strip()
+            if c == '' or c == '0':
+                return ''
+            if c == '1':
+                return 'plotly_resampler'
+            if c == '2':
+                return 'hvplot'
+            if c == '3':
+                return 'finplot'
+            print("Ungültige Eingabe. Bitte 0-3 wählen.")
+    except (EOFError, KeyboardInterrupt):
+        return ''
+
+
+# -------------------------------------------------
 # Analysen laufen lassen (ruft vorhandene Module)
 # -------------------------------------------------
 def run_analysis(df, analysis_type, window=5, candle_tol=0.1, macd_tol=3.25):
@@ -2177,6 +2205,74 @@ if __name__ == "__main__":
             params_v2=(variant2[0], variant2[1]) if variant2 else None,
             params_v3=(variant3[0], variant3[1]) if variant3 else None,
         )
+
+        # Optional: live Auswahl eines schnellen Viewers (ohne Env-Variablen)
+        try:
+            backend_choice = _prompt_fastviz_backend()
+            candle_choice = 'ochl'
+            if backend_choice == 'finplot':
+                try:
+                    ans = input("Heikin-Ashi Kerzen verwenden? (y/N): ").strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    ans = 'n'
+                candle_choice = 'ha' if ans in ('y','yes','1','true') else 'ochl'
+        except Exception:
+            backend_choice = ''
+            candle_choice = 'ochl'
+
+        # Optional fast visualization backends for large datasets (keeps HTML/Plotly unchanged)
+        try:
+            fast_backend = backend_choice.strip().lower()
+            if fast_backend in ('plotly_resampler', 'hvplot', 'finplot'):
+                status_out = None
+                status_candle = candle_choice if fast_backend == 'finplot' else ''
+                # Reuse asset_tag for filenames
+                if fast_backend == 'plotly_resampler':
+                    try:
+                        from fastviz_plotly_resampler import show_fast_plot as _fast_plot
+                        ret = _fast_plot(
+                            df.reset_index().rename_axis(None, axis=1).copy(),
+                            analysis_results,
+                            candle_percent,
+                            macd_percent,
+                            asset_label,
+                            asset_tag=asset_tag,
+                        )
+                        status_out = ret
+                    except Exception as e:
+                        print(f"[FAST_VIZ] plotly-resampler backend failed: {e}")
+                elif fast_backend == 'hvplot':
+                    try:
+                        from fastviz_hvplot import show_fast_hvplot as _fast_hv
+                        # Ensure tz-naive dates for Bokeh
+                        dtmp = df.reset_index().rename_axis(None, axis=1).copy()
+                        try:
+                            dtmp['date'] = pd.to_datetime(dtmp['date']).dt.tz_convert(None)
+                        except Exception:
+                            try:
+                                dtmp['date'] = pd.to_datetime(dtmp['date']).dt.tz_localize(None)
+                            except Exception:
+                                pass
+                        ret = _fast_hv(dtmp, asset_label, asset_tag=asset_tag, use_datashade=True)
+                        status_out = ret
+                    except Exception as e:
+                        print(f"[FAST_VIZ] hvplot backend failed: {e}")
+                elif fast_backend == 'finplot':
+                    try:
+                        from fastviz_finplot import show_fast_finplot as _fast_fp
+                        # finplot opens a window; call after HTML export so baseline stays intact
+                        _fast_fp(df.reset_index().rename_axis(None, axis=1).copy(), analysis_results, asset_label, candle_style=candle_choice)
+                        status_out = '(window)'
+                    except Exception as e:
+                        print(f"[FAST_VIZ] finplot backend failed: {e}")
+                # Statuszeile
+                try:
+                    extra = f" | candle={status_candle}" if status_candle else ""
+                    print(f"FAST_VIZ: backend={fast_backend}{extra} | output={status_out or '-'}")
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     elif atype == 'f':
         # Deine Vorgabe: NUR 2×2-HTML mit allen vier Divergenztypen

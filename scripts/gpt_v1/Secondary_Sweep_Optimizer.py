@@ -129,7 +129,8 @@ def run_secondary_sweep(df: pd.DataFrame,
     """
     # Lazy imports to avoid circular import at module import-time
     from Backtest_Divergences import BacktestParams, backtest as run_backtest
-    from Mainframe_RTv250829_mplfinance import run_analysis, generate_markers_df
+    # Import from the current main orchestrator module
+    from Mainframe_RTv250901 import run_analysis, generate_markers_df
 
     # Parse grids and settings
     try:

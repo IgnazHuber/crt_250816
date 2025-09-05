@@ -114,6 +114,14 @@ def show_fast_finplot(df: pd.DataFrame,
         try:
             mk = _build_markers_df(dfx.reset_index(drop=True).assign(date=pd.to_datetime(dfx.index)).copy(), analysis_results)
             if not mk.empty:
+                style_map = {
+                    'CBullDivg_Classic': '^',
+                    'CBullDivg_Hidden': 'd',
+                    'CBullDivg_x2_Classic': 'x',
+                    'HBullDivg_Classic': 's',
+                    'HBearDivg_Classic': 'v',
+                    'HBullDivg_Hidden': 'o',
+                }
                 for t in sorted(mk['Type'].dropna().unique()):
                     sub = mk[mk['Type'] == t]
                     ts_sub = pd.to_datetime(sub['Date']).dt.tz_convert(None)
@@ -121,7 +129,7 @@ def show_fast_finplot(df: pd.DataFrame,
                     idx_sub = np.clip(idx_sub, 0, len(dfx) - 1)
                     ys = dfx[rsi_col].iloc[idx_sub]
                     color = '#e74c3c' if ('Bear' in t or 'HBear' in t) else '#2ecc71'
-                    style = 'v' if ('Bear' in t or 'HBear' in t) else '^'
+                    style = style_map.get(t, '^')
                     fplt.plot(pd.Series(ys.values, index=ts_sub), ax=ax_rsi, color=color, style=style, width=4, legend=str(t)+' RSI')
         except Exception:
             pass
@@ -141,6 +149,14 @@ def show_fast_finplot(df: pd.DataFrame,
         try:
             mk = _build_markers_df(dfx.reset_index(drop=True).assign(date=pd.to_datetime(dfx.index)).copy(), analysis_results)
             if not mk.empty:
+                style_map = {
+                    'CBullDivg_Classic': '^',
+                    'CBullDivg_Hidden': 'd',
+                    'CBullDivg_x2_Classic': 'x',
+                    'HBullDivg_Classic': 's',
+                    'HBearDivg_Classic': 'v',
+                    'HBullDivg_Hidden': 'o',
+                }
                 for t in sorted(mk['Type'].dropna().unique()):
                     sub = mk[mk['Type'] == t]
                     ts_sub = pd.to_datetime(sub['Date']).dt.tz_convert(None)
@@ -148,7 +164,7 @@ def show_fast_finplot(df: pd.DataFrame,
                     idx_sub = np.clip(idx_sub, 0, len(dfx) - 1)
                     ys = macd_series.iloc[idx_sub]
                     color = '#e74c3c' if ('Bear' in t or 'HBear' in t) else '#2ecc71'
-                    style = 'v' if ('Bear' in t or 'HBear' in t) else '^'
+                    style = style_map.get(t, '^')
                     fplt.plot(pd.Series(ys.values, index=ts_sub), ax=ax_macd, color=color, style=style, width=4, legend=str(t)+' MACD')
         except Exception:
             pass
@@ -163,12 +179,27 @@ def show_fast_finplot(df: pd.DataFrame,
             idx_sub = np.clip(idx_sub, 0, len(dfx) - 1)
             ys_sub = dfx['close'].iloc[idx_sub]
             color = '#e74c3c' if ('Bear' in t or 'HBear' in t) else '#2ecc71'
-            style = 'v' if ('Bear' in t or 'HBear' in t) else '^'
+            style_map = {
+                'CBullDivg_Classic': '^',
+                'CBullDivg_Hidden': 'd',
+                'CBullDivg_x2_Classic': 'x',
+                'HBullDivg_Classic': 's',
+                'HBearDivg_Classic': 'v',
+                'HBullDivg_Hidden': 'o',
+            }
+            style = style_map.get(t, '^')
             s = pd.Series(ys_sub.values, index=ts_sub)
             fplt.plot(s, ax=ax_price, color=color, style=style, width=5, legend=str(t))
 
     # Show window (blocks until closed)
+    # Toolbar hint line & show
     try:
+        # add a small hint overlay
+        try:
+            y_hint = float(dfx['close'].max()) if 'close' in dfx.columns else 0
+            fplt.add_text((dfx.index[0], y_hint), 'Hints: drag=pan, wheel=zoom, right-drag=zoom-x, ctrl+drag=snap', color='#7f8c8d', ax=ax_price)
+        except Exception:
+            pass
         fplt.show()
     except Exception as e:
         print(f"[fastviz_finplot] show failed: {e}")

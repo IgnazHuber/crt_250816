@@ -379,11 +379,13 @@ def get_analysis_type():
         print("   - Prereq: input series with 'date' (ideally regular frequency).")
         print("p: Portfolio layer (allocation, correlation)")
         print("   - Prereq: multiple files with 'date' and 'close'; sufficient overlap.")
+        print("q: Marker validation (verify all markers)")
+        print("   - Prereq: OHLC file and marker CSVs (from a–f)")
         while True:
-            c = input("\nEnter your choice (a-p): ").lower().strip()
-            if c in list("abcdefghijklmnop"):
+            c = input("\nEnter your choice (a-q): ").lower().strip()
+            if c in list("abcdefghijklmnopq"):
                 return c
-            print("Invalid choice. Please enter a through p.")
+            print("Invalid choice. Please enter a through q.")
     except (EOFError, KeyboardInterrupt):
         return "e"
 
@@ -2277,6 +2279,17 @@ if __name__ == "__main__":
     elif atype == 'f':
         # Deine Vorgabe: NUR 2×2-HTML mit allen vier Divergenztypen
         run_doe_analysis(df, make_total=False, make_single=False, asset_label=asset_label)
+        # Offer marker validation directly after DOE
+        try:
+            ans = input("\nRun marker validation now? (y/N): ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            ans = 'n'
+        if ans in ('y','yes','1','true'):
+            try:
+                import markers_validator as _mv
+                _mv.main()
+            except Exception as e:
+                print(f"Marker validation failed to start: {e}")
     elif atype in ('g','h'):
         # Backtesting path
         # Collect markers CSVs from results folder
@@ -2402,7 +2415,7 @@ if __name__ == "__main__":
             print(f"Backtest report saved to: {out_xlsx}")
         except (EOFError, KeyboardInterrupt):
             print("Backtest cancelled by user.")
-    elif atype in ('j','k','l','m','n','o','p'):
+    elif atype in ('j','k','l','m','n','o','p','q'):
         # New scaffolded options: minimal integration hooks
         os.makedirs('results', exist_ok=True)
         # Load markers when needed
@@ -2567,6 +2580,13 @@ if __name__ == "__main__":
             out_html = os.path.join('results', f"portfolio_{ts}.html")
             run_portfolio_allocation(paths, out_xlsx, out_html)
             print(f"Saved: {out_xlsx}, {out_html}")
+        elif atype == 'q':
+            # Standalone marker validation UI
+            try:
+                import markers_validator as _mv
+                _mv.main()
+            except Exception as e:
+                print(f"Marker validation failed to start: {e}")
     else:
         # Secondary sweep optimizer (auto-tune)
         try:

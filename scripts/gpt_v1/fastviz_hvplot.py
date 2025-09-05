@@ -68,7 +68,7 @@ def show_fast_hvplot(df: pd.DataFrame,
     use_ds = _has_ds and bool(use_datashade)
 
     if 'close' in dfx.columns:
-        p_close = dfx.hvplot(x='date', y='close', title=f"{asset_label} — Close{' (datashaded)' if use_ds else ''}", datashade=use_ds, width=1000, height=300)
+        p_close = dfx.hvplot(x='date', y='close', title=f"{asset_label} - Close{' (datashaded)' if use_ds else ''}", datashade=use_ds, width=1000, height=300).opts(legend_position='top_left')
         # VWAP overlay if present
         try:
             if 'VWAP' in dfx.columns:
@@ -118,7 +118,7 @@ def show_fast_hvplot(df: pd.DataFrame,
         print("[fastviz_hvplot] No recognized columns to plot (close/RSI/MACD_histogram/volume).")
         return None
 
-    # Markers as overlay points on price/RSI/MACD (if possible)
+    # Markers as overlay points on all panels (Price/RSI/MACD/Volume/ATR/OBV)
     try:
         # Build markers similar to main logic
         mk = []
@@ -144,42 +144,47 @@ def show_fast_hvplot(df: pd.DataFrame,
                 _add(dt, 'HBullDivg_Hidden')
         if mk and 'close' in dfx.columns:
             mk_df = pd.DataFrame(mk)
-            mk_df = mk_df.merge(dfx[['date','close','RSI'] if 'RSI' in dfx.columns else ['date','close']], left_on='Date', right_on='date', how='left')
+            # Merge panel series to mk_df for y-values
+            base_cols = ['date','close']
+            if 'RSI' in dfx.columns:
+                base_cols.append('RSI')
+            mk_df = mk_df.merge(dfx[base_cols], left_on='Date', right_on='date', how='left')
             if macd_series is not None:
                 mk_df = mk_df.merge(macd_series, left_on='Date', right_on='date', how='left', suffixes=('','_m'))
-            # Group to 4 divergences and map markers, larger size
-            def _group(t: str) -> str:
-                tl = str(t)
-                if 'x2' in tl:
-                    return 'CBullDivg_x2'
-                if 'HBear' in tl:
-                    return 'HBearDivg'
-                if 'HBull' in tl:
-                    return 'HBullDivg'
-                return 'CBullDivg'
-            mk_df['Group'] = mk_df['Type'].map(_group)
+            if 'volume' in dfx.columns:
+                mk_df = mk_df.merge(dfx[['date','volume']], left_on='Date', right_on='date', how='left', suffixes=('','_v'))
+            if 'ATR_Pct' in dfx.columns:
+                mk_df = mk_df.merge(dfx[['date','ATR_Pct']], left_on='Date', right_on='date', how='left', suffixes=('','_atr'))
+            if 'OBV' in dfx.columns:
+                mk_df = mk_df.merge(dfx[['date','OBV']], left_on='Date', right_on='date', how='left', suffixes=('','_obv'))
+
+            # Marker mapping per divergence type
             sym_map = {
-                'CBullDivg': 'triangle_up',
-                'CBullDivg_x2': 'asterisk',
-                'HBullDivg': 'square',
-                'HBearDivg': 'triangle_down',
+                'CBullDivg_Classic': 'triangle_up',
+                'CBullDivg_Hidden': 'diamond',
+                'CBullDivg_x2_Classic': 'asterisk',
+                'HBullDivg_Classic': 'square',
+                'HBearDivg_Classic': 'inverted_triangle',
+                'HBullDivg_Hidden': 'x',
             }
-            def color_for_group(g):
-                return '#e74c3c' if g == 'HBearDivg' else '#2ecc71'
+            def color_for_type(t):
+                return '#e74c3c' if ('HBear' in str(t) or 'HBearDivg' in str(t) or 'Bear' in str(t)) else '#2ecc71'
+
             # overlay on Price
-            for g, sub in mk_df.groupby('Group'):
-                pts = sub.hvplot.scatter(x='Date', y='close', color=color_for_group(g), marker=sym_map.get(g, 'circle'), size=10, alpha=0.85)
+            for t, sub in mk_df.groupby('Type'):
+                if sub.empty:
+                    continue
+                pts = sub.hvplot.scatter(x='Date', y='close', label=str(t), color=color_for_type(t), marker=sym_map.get(t, 'circle'), size=10, alpha=0.85)
                 plots[0] = plots[0] * pts
             # overlay on RSI if present
             if 'RSI' in dfx.columns:
-                # Find RSI plot index (after price): search by title matching 'RSI'
                 try:
                     rsi_idx = next(i for i,p in enumerate(plots) if hasattr(p, 'opts') and 'RSI' in str(p.opts.get('title')))
                 except Exception:
                     rsi_idx = 1 if len(plots) > 1 else None
                 if rsi_idx is not None:
-                    for g, sub in mk_df.dropna(subset=['RSI']).groupby('Group') if 'RSI' in mk_df.columns else []:
-                        pts = sub.hvplot.scatter(x='Date', y='RSI', color=color_for_group(g), marker=sym_map.get(g, 'circle'), size=9, alpha=0.8)
+                    for t, sub in mk_df.dropna(subset=['RSI']).groupby('Type'):
+                        pts = sub.hvplot.scatter(x='Date', y='RSI', label=str(t)+' RSI', color=color_for_type(t), marker=sym_map.get(t, 'circle'), size=9, alpha=0.8)
                         plots[rsi_idx] = plots[rsi_idx] * pts
             # overlay on MACD if present
             if macd_series is not None:
@@ -188,9 +193,39 @@ def show_fast_hvplot(df: pd.DataFrame,
                 except Exception:
                     macd_idx = None
                 if macd_idx is not None and 'macd_v' in mk_df.columns:
-                    for g, sub in mk_df.dropna(subset=['macd_v']).groupby('Group'):
-                        pts = sub.hvplot.scatter(x='Date', y='macd_v', color=color_for_group(g), marker=sym_map.get(g, 'circle'), size=9, alpha=0.8)
+                    for t, sub in mk_df.dropna(subset=['macd_v']).groupby('Type'):
+                        pts = sub.hvplot.scatter(x='Date', y='macd_v', label=str(t)+' MACD', color=color_for_type(t), marker=sym_map.get(t, 'circle'), size=9, alpha=0.8)
                         plots[macd_idx] = plots[macd_idx] * pts
+            # overlay on Volume if present
+            if 'volume' in dfx.columns:
+                try:
+                    vol_idx = next(i for i,p in enumerate(plots) if hasattr(p, 'opts') and ('Volume' in str(p.opts.get('title'))))
+                except Exception:
+                    vol_idx = None
+                if vol_idx is not None and 'volume' in mk_df.columns:
+                    for t, sub in mk_df.dropna(subset=['volume']).groupby('Type'):
+                        pts = sub.hvplot.scatter(x='Date', y='volume', label=str(t)+' Vol', color=color_for_type(t), marker=sym_map.get(t, 'circle'), size=7, alpha=0.7)
+                        plots[vol_idx] = plots[vol_idx] * pts
+            # overlay on ATR% if present
+            if 'ATR_Pct' in dfx.columns:
+                try:
+                    atr_idx = next(i for i,p in enumerate(plots) if hasattr(p, 'opts') and ('ATR' in str(p.opts.get('title'))))
+                except Exception:
+                    atr_idx = None
+                if atr_idx is not None and 'ATR_Pct' in mk_df.columns:
+                    for t, sub in mk_df.dropna(subset=['ATR_Pct']).groupby('Type'):
+                        pts = sub.hvplot.scatter(x='Date', y='ATR_Pct', label=str(t)+' ATR%', color=color_for_type(t), marker=sym_map.get(t, 'circle'), size=7, alpha=0.7)
+                        plots[atr_idx] = plots[atr_idx] * pts
+            # overlay on OBV if present
+            if 'OBV' in dfx.columns:
+                try:
+                    obv_idx = next(i for i,p in enumerate(plots) if hasattr(p, 'opts') and ('OBV' in str(p.opts.get('title'))))
+                except Exception:
+                    obv_idx = None
+                if obv_idx is not None and 'OBV' in mk_df.columns:
+                    for t, sub in mk_df.dropna(subset=['OBV']).groupby('Type'):
+                        pts = sub.hvplot.scatter(x='Date', y='OBV', label=str(t)+' OBV', color=color_for_type(t), marker=sym_map.get(t, 'circle'), size=7, alpha=0.7)
+                        plots[obv_idx] = plots[obv_idx] * pts
     except Exception:
         pass
 
@@ -204,6 +239,28 @@ def show_fast_hvplot(df: pd.DataFrame,
                 overlay = curve if overlay is None else overlay * curve
             if overlay is not None:
                 plots[0] = plots[0] * overlay.opts(alpha=0.9)
+    except Exception:
+        pass
+
+    # Compact legend note (marker mapping) as on-chart text
+    try:
+        import holoviews as hv
+        min_dt = pd.to_datetime(dfx['date']).min()
+        y_top = float(dfx['close'].max()) if 'close' in dfx.columns else 1.0
+        note = 'Markers: CBullDivg=△ (green), CBullDivg_x2=★ (green), HBullDivg=■ (green), HBearDivg=▽ (red)'
+        text = hv.Text(min_dt, y_top, note).opts(text_color='#2c3e50', bgcolor='white', alpha=0.8, fontsize=10)
+        plots[0] = plots[0] * text
+    except Exception:
+        pass
+
+    # Compact legend note (marker mapping) as on-chart text
+    try:
+        import holoviews as hv
+        min_dt = pd.to_datetime(dfx['date']).min()
+        y_top = float(dfx['close'].max()) if 'close' in dfx.columns else 1.0
+        note = 'Markers per divergence: CBullDivg_Classic=△, CBullDivg_Hidden=◆, CBullDivg_x2_Classic=✱, HBullDivg_Classic=■, HBearDivg_Classic=▽, HBullDivg_Hidden=×'
+        text = hv.Text(min_dt, y_top, note).opts(text_color='#2c3e50', bgcolor='white', alpha=0.8, fontsize=10)
+        plots[0] = plots[0] * text
     except Exception:
         pass
 

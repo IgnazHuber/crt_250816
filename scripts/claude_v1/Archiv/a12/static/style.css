@@ -1,0 +1,152 @@
+body {
+    background-color: #1a1a1a;
+    color: #ffffff;
+    font-family: Arial, sans-serif;
+    margin: 0;
+    padding: 20px;
+}
+
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+.header {
+    text-align: center;
+    margin-bottom: 30px;
+}
+
+.controls {
+    background-color: #2a2a2a;
+    padding: 7px;
+    border-radius: 8px;
+    margin-bottom: 7px;
+}
+
+.file-upload, .variant-controls, .analyze-controls {
+    margin-bottom: 5.6px;
+    display: flex;
+    align-items: center;
+    gap: 3.5px;
+    flex-wrap: wrap;
+}
+
+.file-upload label, .variant-controls label {
+    margin-right: 3.5px;
+    font-size: 12px;
+}
+
+input[type="file"], input[type="text"], input[type="number"], button.btn {
+    background-color: #3a3a3a;
+    color: #ffffff;
+    border: 1px solid #555;
+    padding: 4.55px;
+    border-radius: 4px;
+    width: 120px;
+    height: 18px;
+    box-sizing: border-box;
+    font-size: 12px;
+    line-height: 18px;
+    display: flex;
+    align-items: center;
+}
+
+input[type="text"]#variantName {
+    width: 120px;
+}
+
+input[type="number"] {
+    -moz-appearance: textfield;
+}
+
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: inner-spin-button;
+    appearance: inner-spin-button;
+    opacity: 1;
+    width: 10.5px;
+    height: 10.5px;
+    cursor: pointer;
+}
+
+.btn {
+    background-color: #4CAF50;
+    cursor: pointer;
+}
+
+.btn:hover {
+    background-color: #45a049;
+}
+
+.btn-danger {
+    background-color: #f44336;
+}
+
+.btn-danger:hover {
+    background-color: #da190b;
+}
+
+.chart-container {
+    background-color: #2a2a2a;
+    padding: 7px;
+    border-radius: 8px;
+    margin-bottom: 7px;
+    height: calc(100vh - 150px);
+}
+
+#variants {
+    margin-top: 3.5px;
+}
+
+.variant {
+    background-color: #3a3a3a;
+    padding: 3.5px;
+    margin: 2.1px 0;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    gap: 3.5px;
+    font-size: 12px;
+}
+
+.stats-card {
+    background-color: #2a2a2a;
+    padding: 7px;
+    border-radius: 8px;
+}
+
+.message {
+    padding: 3.5px;
+    border-radius: 4px;
+    margin: 3.5px 0;
+    font-size: 12px;
+}
+
+.message.success {
+    background-color: #4CAF50;
+}
+
+.message.error {
+    background-color: #f44336;
+}
+
+.message.loading {
+    background-color: #2196F3;
+}
+
+.status-indicator {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    padding: 3.5px;
+    border-radius: 4px;
+    font-size: 12px;
+}
+
+.status-online {
+    background-color: #4CAF50;
+}
+
+.status-offline {
+    background-color: #f44336;
+}

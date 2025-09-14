@@ -1,0 +1,1 @@
+c:\Projekte\crt_250816\scripts\rt_250907\Historical_data_Indicator_Calculation\output\CRYPTO\BTC\output_1week_parquet\

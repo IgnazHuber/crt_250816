@@ -1,0 +1,197 @@
+import pandas as pd
+import warnings
+import os
+import json
+import numpy as np
+import argparse
+import glob
+import sys
+from Initialize_RSI_EMA_MACD_vectorized import Initialize_RSI_EMA_MACD
+from CS_Type import Candlestick_Type
+from Level_1_Maximas_Minimas import Level_1_Max_Min
+from HBearDivg_analysis_vectorized import HBearDivg_analysis
+from HBullDivg_analysis_vectorized import HBullDivg_analysis
+from CBearDivg_analysis_vectorized import CBearDivg_analysis
+from CBullDivg_analysis_vectorized import CBullDivg_analysis
+from CBullDivg_x2_analysis_vectorized import CBullDivg_x2_analysis
+from Goldenratio_vectorized import calculate_golden_ratios
+import multiprocessing as mp
+import uuid
+try:
+    import tkinter as tk
+    from tkinter import filedialog
+except Exception:
+    tk = None
+    filedialog = None
+
+# Set pandas options
+pd.set_option('display.max_rows', None)
+pd.set_option('display.max_columns', None)
+pd.set_option('display.width', None)
+pd.set_option('display.max_colwidth', None)
+pd.options.mode.chained_assignment = None
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings('ignore', message='DataFrame is highly fragmented*')
+
+CONFIG_PATH = os.path.join(os.path.dirname(__file__), '.last_paths.json')
+
+
+def _load_last_paths():
+    try:
+        with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            # Backward compatible: older file may contain output_dir; ignore it now
+            return data.get('input_dir'), data.get('output_dir')
+    except Exception:
+        return None, None
+
+
+def _save_last_paths(input_dir, output_dir=None):
+    try:
+        with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+            json.dump({'input_dir': input_dir}, f)
+    except Exception:
+        pass
+
+
+def _select_input_files_multiple_folders():
+    """Allow selecting raw CSV files across multiple folders.
+    Opens the file dialog repeatedly; cancel to finish selection.
+    Remembers the last folder.
+    Returns list[str] of absolute file paths.
+    """
+    last_input_dir, _ = _load_last_paths()
+    if filedialog is None:
+        raise RuntimeError('tkinter not available; cannot open file dialogs.')
+
+    root = tk.Tk()
+    root.withdraw()
+
+    selected = []
+    seen = set()
+    current_dir = last_input_dir or os.getcwd()
+
+    while True:
+        file_paths = filedialog.askopenfilenames(
+            title='Select raw CSV files (Cancel to finish)',
+            initialdir=current_dir,
+            filetypes=[('CSV files', '*.csv'), ('All files', '*.*')]
+        )
+        if not file_paths:
+            break
+        # Add unique files; update current_dir to the directory of the last selection
+        for p in file_paths:
+            if p not in seen:
+                selected.append(p)
+                seen.add(p)
+        current_dir = os.path.dirname(file_paths[-1])
+
+    if not selected:
+        raise SystemExit('No input files selected.')
+
+    # Remember the last visited folder
+    _save_last_paths(current_dir)
+    return selected
+
+
+def _parse_args():
+    parser = argparse.ArgumentParser(
+        description='Compute indicators over growing windows and write parquet outputs.'
+    )
+    parser.add_argument(
+        '--files', nargs='+', help='One or more CSV file paths to process.'
+    )
+    parser.add_argument(
+        '--dir', dest='input_dir', help='Directory containing CSV files to process.'
+    )
+    parser.add_argument(
+        '--pattern', default='*.csv', help='Glob pattern for --dir (default: *.csv).'
+    )
+    parser.add_argument(
+        '--output-dir', help='Directory to write outputs (default: alongside each input file).'
+    )
+    parser.add_argument(
+        '--pool', type=int, default=6, help='Worker processes (default: 6).'
+    )
+    args = parser.parse_args()
+    return args
+
+def process_i(csv_file_path, output_dir, i):
+    # Create unique temp parquet for this process
+    temp_parquet_path = os.path.join(output_dir, f'temp_df_{uuid.uuid4().hex}.parquet')
+    pd.read_csv(csv_file_path, header=0, parse_dates=['date']).head(i).to_parquet(
+        temp_parquet_path, index=False, engine='pyarrow'
+    )
+
+    # Load from this parquet
+    df = pd.read_parquet(temp_parquet_path)
+
+    # Initialize indicators
+    Initialize_RSI_EMA_MACD(df)
+    Level_1_Max_Min(df)
+    Candlestick_Type(df)
+    CBullDivg_analysis(df, 0.1, 0.1)
+    CBullDivg_x2_analysis(df, 0.1, 0.1)
+    HBullDivg_analysis(df, 0.1, 0.1)
+    CBearDivg_analysis(df, 0.01, 0.01)
+    HBearDivg_analysis(df, 0.01, 0.01)
+
+    df = calculate_golden_ratios(df)
+
+    # Save output
+    last_date = df['date'].iloc[-1]
+    last_date_sanitized = str(last_date).replace('/', '-').replace(':', '-').replace(' ', '_')
+    output_file = os.path.join(output_dir, f'output_{last_date_sanitized}.parquet')
+    df.tail(400).to_parquet(output_file, index=False, engine='pyarrow')
+
+    # Clean up unique temp file
+    try:
+        os.remove(temp_parquet_path)
+    except FileNotFoundError:
+        pass
+
+
+def process_file(csv_file_path, output_dir, pool_size=6):
+    df_full = pd.read_csv(csv_file_path, header=0, parse_dates=['date'])
+    len_df = len(df_full)
+    del df_full
+
+    with mp.Pool(pool_size) as pool:
+        pool.starmap(
+            process_i,
+            [(csv_file_path, output_dir, i) for i in range(200, max(200, len_df) - 1)]
+        )
+
+if __name__ == '__main__':
+    args = _parse_args()
+
+    csv_files = []
+    if args.files:
+        csv_files = [os.path.abspath(p) for p in args.files]
+        # Remember last folder used
+        try:
+            if csv_files:
+                _save_last_paths(os.path.dirname(csv_files[-1]))
+        except Exception:
+            pass
+    elif args.input_dir:
+        input_dir = os.path.abspath(args.input_dir)
+        pattern = os.path.join(input_dir, args.pattern)
+        csv_files = sorted(glob.glob(pattern))
+        if not csv_files:
+            sys.exit(f'No files matched pattern {args.pattern!r} in {input_dir!r}.')
+        try:
+            _save_last_paths(input_dir)
+        except Exception:
+            pass
+    else:
+        # Fallback to interactive selection if available
+        if filedialog is not None:
+            csv_files = _select_input_files_multiple_folders()
+        else:
+            sys.exit('tkinter not available; pass --files or --dir to run headless.')
+
+    for csv_path in csv_files:
+        out_dir = args.output_dir or os.path.dirname(csv_path)
+        os.makedirs(out_dir, exist_ok=True)
+        process_file(csv_path, out_dir, pool_size=max(1, int(args.pool)))

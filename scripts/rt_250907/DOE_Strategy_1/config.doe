@@ -1,0 +1,66 @@
+# Design of Experiments configuration (TOML)
+#
+# Goal: generate a few trades reliably. We do this by
+# using explicit specs with permissive ranges and a low
+# global cap. The runner prefers [[specs]] over [grid].
+
+# Cap total runs (explicit specs below are 6)
+max_specs = 6
+
+# Explicit specs (used with priority)
+[[specs]]
+ema_variant = "v1"
+div_family = "hb_any"
+rsi_lower_low_range = [10, 90]
+rsi_higher_low_range = [10, 90]
+date_gap_range = [10, 90]
+slope_range = [0, 999999]
+
+[[specs]]
+ema_variant = "v1"
+div_family = "hb_any"
+rsi_lower_low_range = [15, 55]
+rsi_higher_low_range = [30, 70]
+date_gap_range = [10, 90]
+slope_range = [0, 999999]
+
+[[specs]]
+ema_variant = "v1"
+div_family = "cb_gen"
+rsi_lower_low_range = [10, 90]
+rsi_higher_low_range = [10, 90]
+date_gap_range = [10, 90]
+slope_range = [0, 999999]
+
+[[specs]]
+ema_variant = "v1"
+div_family = "cb_gen"
+rsi_lower_low_range = [15, 55]
+rsi_higher_low_range = [30, 70]
+date_gap_range = [10, 90]
+slope_range = [0, 999999]
+
+[[specs]]
+ema_variant = "v1"
+div_family = "cb_neg"
+rsi_lower_low_range = [10, 90]
+rsi_higher_low_range = [10, 90]
+date_gap_range = [10, 90]
+slope_range = [0, 999999]
+
+[[specs]]
+ema_variant = "v1"
+div_family = "cb_neg"
+rsi_lower_low_range = [15, 55]
+rsi_higher_low_range = [30, 70]
+date_gap_range = [10, 90]
+slope_range = [0, 999999]
+
+# Optional grid (ignored because [[specs]] are present). Keep as a template.
+# [grid]
+# ema_variants = ["v1"]
+# families = ["hb_any", "cb_gen", "cb_neg"]
+# step = 40
+# low = 10
+# high = 90
+# limit = 1

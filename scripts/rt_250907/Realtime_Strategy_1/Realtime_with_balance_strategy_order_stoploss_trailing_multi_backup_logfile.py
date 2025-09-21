@@ -1,4 +1,4 @@
-# Realtime_with_balance_strategy_order_stoploss_trailing_multi_backup.py
+# Realtime_with_balance_strategy_order_stoploss_trailing_multi_backup_2_multipleorders.py
 import time
 import pandas as pd
 import warnings
@@ -12,6 +12,14 @@ from CS_Type import Candlestick_Type
 from Level_1_Maximas_Minimas import Level_1_Max_Min
 from CBullDivg_analysis_vectorized import CBullDivg_analysis
 from HBullDivg_analysis_vectorized import HBullDivg_analysis
+from CBearDivg_analysis_vectorized import CBearDivg_analysis
+from HBearDivg_analysis_vectorized import HBearDivg_analysis
+from CBullDivg_x2_analysis_vectorized import CBullDivg_x2_analysis
+from Goldenratio_vectorized import calculate_golden_ratios
+from Support_Resistance_vectorized import calculate_support_levels
+from Trendline_Up_Support_vectorized import calc_TL_Up_Support
+from Trendline_Up_Resistance_vectorized import calc_TL_Up_Resistance
+from Trendline_Down_Resistance_vectorized import calc_TL_Down_Resistance
 from Get_Account_Balance import Checking_Balance
 from Placing_Market_Order import Placing_Market_Order
 from Get_candlestick_data import get_candlestick_data
@@ -21,23 +29,77 @@ import multiprocessing
 import math
 from functools import partial
 import logging
+import logging.handlers
 import subprocess
+from multiprocessing import Queue
 
 # Suppress warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=pd.errors.PerformanceWarning)
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
+# Create a logs directory if it doesn't exist
+log_dir = "logs"
+os.makedirs(log_dir, exist_ok=True)
+
+# Define log file path
+log_file = os.path.join(log_dir, "trading_bot.log")  # Single file name, rotated files will append .1, .2, etc.
+
+# Configure logging
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+# Create formatter
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+# Create logging queue and listener for multiprocessing
+log_queue = Queue()
+
+def configure_logger(queue):
+    """Configure logger for a process to send logs to a queue."""
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.INFO)
+    queue_handler = logging.handlers.QueueHandler(queue)
+    # Do not set formatter on queue_handler to avoid pre-formatting
+    logger.handlers = []  # Clear existing handlers
+    logger.addHandler(queue_handler)
+    return logger
+
+def listener_process(queue, log_file):
+    """Listener process to write logs from the queue to file and console."""
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.INFO)
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    file_handler = logging.handlers.RotatingFileHandler(
+        log_file,
+        maxBytes=10*1024*1024,  # 10 MB per file
+        backupCount=999999  # Allow virtually unlimited backup files
+    )
+    file_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+    logger.addHandler(file_handler)
+    while True:
+        try:
+            record = queue.get()
+            if record is None:  # Sentinel to stop the listener
+                break
+            logger.handle(record)
+        except Exception as e:
+            logger.error(f"Error in listener: {e}")
+
+def worker_init(queue):
+    """Initializer for worker processes to set up queue-based logging."""
+    global logger
+    logger = configure_logger(queue)
 
 # Constants for risk management
-RISK_PERC = 0.01  # 1% risk per trade
+RISK_PERC = 0.0001  # 0.01% risk per trade
 BROKERAGE_BUY = 0.001  # 0.1% taker fee for spot market orders on Bybit
 BROKERAGE_SELL = 0.001  # 0.1% taker fee for spot market orders on Bybit
 
 # Archiving configuration
-ARCHIVE_FREQUENCY = "daily"  # Options: "hourly", "daily", "weekly"
+ARCHIVE_FREQUENCY = "hourly"  # Options: "hourly", "daily", "weekly"
 LAST_ARCHIVE_TIME = None  # Will be initialized in main()
 
 # Initialize Bybit API session
@@ -55,11 +117,9 @@ SYMBOL_PRECISION = {
     'ADAUSDT': 1,  # e.g., 0.1 ADA
 }
 
-
 def get_quantity_precision(symbol):
     """Return the number of decimal places allowed for the symbol's quantity."""
     return SYMBOL_PRECISION.get(symbol, 4)  # Default to 4 if symbol not found
-
 
 def round_down(value, decimals):
     """Round down the value to the specified number of decimal places, preserving the exact precision."""
@@ -68,13 +128,11 @@ def round_down(value, decimals):
     factor = 10 ** decimals
     return math.floor(value * factor) / factor
 
-
 def get_interval_delta(interval):
     """Get timedelta for the given interval."""
     if interval == "D":
         return timedelta(days=1)
     return timedelta(minutes=int(interval))
-
 
 def format_date(date_value):
     """Format date to string in 'YYYY-MM-DD HH:MM:SS' format."""
@@ -86,7 +144,6 @@ def format_date(date_value):
     else:
         date_obj = date_value
     return date_obj.strftime('%Y-%m-%d %H:%M:%S')
-
 
 def compute_indicators(df, symbol, interval):
     """Compute technical indicators on the DataFrame with interval-specific tolerances for CBullDivg_analysis."""
@@ -108,22 +165,20 @@ def compute_indicators(df, symbol, interval):
         return df
 
     except Exception as e:
-        print(f"Error computing indicators: {e}")
+        logger.error(f"Error computing indicators for {symbol} {interval}: {e}")
         return None
-
 
 def save_parquet(df, folder):
     """Save DataFrame to parquet file in the specified folder, named with the last timestamp."""
     if df.empty or len(df) < 1:
-        print("DataFrame is empty, skipping save.")
+        logger.info("DataFrame is empty, skipping save.")
         return
     os.makedirs(folder, exist_ok=True)
     last_timestamp = df.iloc[-1]['timestamp']
     file_timestamp = last_timestamp.replace(':', '-').replace(' ', '_')
     parquet_path = os.path.join(folder, f"historical_data_{file_timestamp}.parquet")
     df.to_parquet(parquet_path, index=False)
-    print(f"Saved parquet file: {parquet_path} with {len(df)} rows")
-
+    logger.info(f"Saved parquet file: {parquet_path} with {len(df)} rows")
 
 def load_pending_order(folder):
     """Load pending order from JSON file if it exists."""
@@ -139,13 +194,11 @@ def load_pending_order(folder):
             os.remove(pending_order_file)
     return None, pending_order_file
 
-
 def save_pending_order(pending_order, pending_order_file):
     """Save pending order to JSON file."""
     with open(pending_order_file, 'w') as f:
         json.dump(pending_order, f)
     logger.info(f"Saved pending_order to {pending_order_file}")
-
 
 def apply_pending_order_to_df(df, pending_order, pending_order_file, symbol, interval):
     """Apply pending trade details to the last row of the DataFrame and remove the file."""
@@ -155,7 +208,6 @@ def apply_pending_order_to_df(df, pending_order, pending_order_file, symbol, int
     logger.info(f"Applied pending trade details to {symbol} {interval} at timestamp {df.iloc[-1]['timestamp']}")
     os.remove(pending_order_file)
     logger.info(f"Removed pending_order file {pending_order_file}")
-
 
 def fetch_balances_and_set(df, symbol):
     """Fetch account balances and set them in the DataFrame."""
@@ -172,7 +224,6 @@ def fetch_balances_and_set(df, symbol):
     for col in ORDER_COLUMNS + ['Stoploss_Trigger']:
         if col not in df.columns:
             df[col] = 0 if col in ['Actual_Buy', 'Actual_Sell', 'Stoploss_Trigger', 'Trade_Qty'] else None
-
 
 def place_buy_order_and_store_pending(symbol, interval, pending_order_file, close_price, stoploss, usdt_balance):
     """Place a market buy order using quoteCoin with risk_amount and store pending trade details."""
@@ -238,9 +289,8 @@ def place_buy_order_and_store_pending(symbol, interval, pending_order_file, clos
         logger.error(f"Error placing Buy Order for {symbol} {interval}: {e}")
     return None
 
-
 def place_sell_order_and_store_pending(symbol, interval, pending_order_file, df):
-    """Place a market sell order using the base coin quantity from trade history minus trade fee and store pending trade details."""
+    """Place a market sell order using the total open position quantity from trade history and store pending trade details."""
     try:
         # Check if there's an active buy position with trade quantity
         buy_cum = df['Actual_Buy'].sum()
@@ -251,14 +301,13 @@ def place_sell_order_and_store_pending(symbol, interval, pending_order_file, df)
             logger.info(f"No active buy position to sell for {symbol} {interval}")
             return None
 
-        # Get the trade quantity and fee from the last buy order
-        last_buy_row = df[df['Actual_Buy'] == 1].iloc[-1]
-        trade_qty = last_buy_row.get('Trade_Qty', 0)
-        trade_fee = last_buy_row.get('Trade_Fee', 0) or 0  # Handle None case
-        available_qty = trade_qty
+        # Calculate total available quantity from all open buys
+        total_buy_qty = df[df['Actual_Buy'] == 1]['Trade_Qty'].sum() - df[df['Actual_Buy'] == 1]['Trade_Fee'].sum()
+        total_sell_qty = df[df['Actual_Sell'] == 1]['Trade_Qty'].sum()
+        available_qty = total_buy_qty - total_sell_qty
         if available_qty <= 0:
             logger.info(
-                f"No valid available quantity (Trade_Qty {trade_qty} = {available_qty}) for {symbol} {interval} to sell")
+                f"No valid available quantity ({available_qty}) for {symbol} {interval} to sell")
             return None
 
         # Round down the quantity to the symbol's allowed precision
@@ -268,13 +317,13 @@ def place_sell_order_and_store_pending(symbol, interval, pending_order_file, df)
             logger.info(f"Rounded quantity for {symbol} {interval} is 0, no sell order placed")
             return None
 
-        sell_qty = round_down(rounded_qty * (1 - BROKERAGE_SELL), precision)
+        sell_qty = round_down(rounded_qty, precision)
         if sell_qty <= 0:
             logger.info(f"Rounded sell quantity for {symbol} {interval} is 0 after fee, no sell order placed")
             return None
 
         logger.info(
-            f"Attempting to place sell order for {symbol} {interval} with quantity {sell_qty} (baseCoin) after fee {trade_fee}")
+            f"Attempting to place sell order for {symbol} {interval} with quantity {sell_qty} (baseCoin)")
         response = Placing_Market_Order(
             session=session_demo,
             category="spot",
@@ -304,7 +353,6 @@ def place_sell_order_and_store_pending(symbol, interval, pending_order_file, df)
         logger.error(f"Error placing sell order for {symbol} {interval}: {e}")
     return None
 
-
 def apply_trailing_stoploss(df):
     """Apply trailing stoploss logic to the last row if there is an open position."""
     buy_count = df['Actual_Buy'].sum()
@@ -326,7 +374,6 @@ def apply_trailing_stoploss(df):
         else:
             df.at[df.index[-1], 'Stoploss_Trigger'] = 0
     return df
-
 
 def process_and_save_df(df, symbol, interval, folder, pending_order, pending_order_file, is_realtime=False):
     """Process DataFrame with indicators and strategy, collect potential order, and save."""
@@ -365,10 +412,10 @@ def process_and_save_df(df, symbol, interval, folder, pending_order, pending_ord
                     buy_cum = df['Actual_Buy'].sum()
                     sell_cum = df['Actual_Sell'].sum()
                     if buy_cum > sell_cum:
-                        last_buy_row = df[df['Actual_Buy'] == 1].iloc[-1]
-                        trade_qty = last_buy_row.get('Trade_Qty', 0)
-                        trade_fee = last_buy_row.get('Trade_Fee', 0) or 0
-                        available_qty = trade_qty
+                        # Calculate total available quantity from all open buys
+                        total_buy_qty = df[df['Actual_Buy'] == 1]['Trade_Qty'].sum()
+                        total_sell_qty = df[df['Actual_Sell'] == 1]['Trade_Qty'].sum()
+                        available_qty = total_buy_qty - total_sell_qty
                         if available_qty > 0:
                             potential_order = {
                                 'symbol': symbol,
@@ -388,7 +435,6 @@ def process_and_save_df(df, symbol, interval, folder, pending_order, pending_ord
     else:
         potential_order = None
     return df, potential_order
-
 
 def execute_order(potential_order):
     """Execute a single order with refetched balances."""
@@ -432,7 +478,6 @@ def execute_order(potential_order):
         else:
             logger.info(f"Failed to execute sell order for {symbol} {interval}")
 
-
 def get_archive_delta(frequency):
     """Get timedelta for the archive frequency."""
     if frequency == "hourly":
@@ -443,7 +488,6 @@ def get_archive_delta(frequency):
         return timedelta(weeks=1)
     else:
         return timedelta(days=1)  # Default
-
 
 def archive_old_files(folders, frequency):
     """Archive older parquet files in each folder to .7z format and remove originals."""
@@ -475,7 +519,6 @@ def archive_old_files(folders, frequency):
             else:
                 logger.error(f"Failed to archive files for {folder}: {result.stderr}")
 
-
 def update_data(symbol, interval):
     """Fetch, process, and save incremental candlestick data for a symbol and interval. Return potential order."""
     folder = f"{symbol}_{interval}"
@@ -491,7 +534,7 @@ def update_data(symbol, interval):
     existing_files = [f for f in os.listdir(folder) if f.startswith('historical_data') and f.endswith('.parquet')]
 
     if not existing_files:
-        print(f"No parquet files found for {symbol} {interval}. Fetching last 1000 candles.")
+        logger.info(f"No parquet files found for {symbol} {interval}. Fetching last 1000 candles.")
         start_time = (now_dt - timedelta(days=200)).strftime('%Y-%m-%d %H:%M:%S')
         df = get_candlestick_data(session_demo, symbol, start_time, current_time_str, interval)
         if not df.empty:
@@ -509,7 +552,7 @@ def update_data(symbol, interval):
     latest_file = max(existing_files, key=lambda f: os.path.getctime(os.path.join(folder, f)))
     df = pd.read_parquet(os.path.join(folder, latest_file))
     if df.empty:
-        print(f"Latest parquet file for {symbol} {interval} is empty. Fetching last 1000 candles.")
+        logger.info(f"Latest parquet file for {symbol} {interval} is empty. Fetching last 1000 candles.")
         start_time = (now_dt - timedelta(days=200)).strftime('%Y-%m-%d %H:%M:%S')
         df = get_candlestick_data(session_demo, symbol, start_time, current_time_str, interval)
         if not df.empty:
@@ -526,7 +569,7 @@ def update_data(symbol, interval):
     last_timestamp = pd.to_datetime(last_timestamp_str, utc=True)
     last_candle_close = last_timestamp + interval_delta
     if last_candle_close > now_dt:
-        print(f"Data for {symbol} {interval} is up to date.")
+        logger.info(f"Data for {symbol} {interval} is up to date.")
         return None
 
     # Fetch new candles in chunks
@@ -534,8 +577,8 @@ def update_data(symbol, interval):
     total_seconds = (now_dt - last_timestamp).total_seconds()
     total_candles = math.ceil(total_seconds / interval_seconds)
 
-    print(f"Fetching new data for {symbol} {interval} from {last_timestamp} to {now_dt} "
-          f"({total_candles} candles needed)...")
+    logger.info(f"Fetching new data for {symbol} {interval} from {last_timestamp} to {now_dt} "
+                f"({total_candles} candles needed)...")
 
     new_start_time = last_timestamp
     potential_order = None
@@ -544,7 +587,7 @@ def update_data(symbol, interval):
         new_start_time_str = new_start_time.strftime('%Y-%m-%d %H:%M:%S')
         chunk_end_time_str = chunk_end_time.strftime('%Y-%m-%d %H:%M:%S')
 
-        print(f"Fetching chunk from {new_start_time_str} to {chunk_end_time_str}...")
+        logger.info(f"Fetching chunk from {new_start_time_str} to {chunk_end_time_str}...")
         new_df = get_candlestick_data(session_demo, symbol, new_start_time_str, chunk_end_time_str, interval)
 
         if not new_df.empty:
@@ -553,7 +596,7 @@ def update_data(symbol, interval):
             new_df = new_df[new_df['ts_dt'] + interval_delta <= now_dt].copy().drop('ts_dt', axis=1)
             new_df = new_df[~new_df['timestamp'].isin(df['timestamp'])]
             if not new_df.empty:
-                fetch_balances_and_set(new_df, symbol)  # <-- ADD THIS: Sets USDT_Balance on new rows
+                fetch_balances_and_set(new_df, symbol)
                 for idx in range(len(new_df)):
                     single_df = new_df.iloc[[idx]]
                     updated_df = pd.concat([df, single_df], ignore_index=True)
@@ -565,18 +608,16 @@ def update_data(symbol, interval):
                 last_processed_ts = pd.to_datetime(new_df['timestamp'].iloc[-1], utc=True)
                 new_start_time = last_processed_ts + interval_delta
             else:
-                print(f"No new unique complete data in chunk for {symbol} {interval}.")
+                logger.info(f"No new unique complete data in chunk for {symbol} {interval}.")
                 new_start_time = chunk_end_time
         else:
-            print(
-                f"No new data fetched for chunk {new_start_time_str} to {chunk_end_time_str} for {symbol} {interval}.")
+            logger.info(f"No new data fetched for chunk {new_start_time_str} to {chunk_end_time_str} for {symbol} {interval}.")
             new_start_time = chunk_end_time
 
-    print(f"Completed fetching and processing for {symbol} {interval}.")
+    logger.info(f"Completed fetching and processing for {symbol} {interval}.")
     if pending_order:
         pending_order = None
     return potential_order
-
 
 def wait_until_next_update(intervals):
     """Wait until the next update based on the shortest interval, aligned to its candle boundary."""
@@ -591,9 +632,8 @@ def wait_until_next_update(intervals):
     if next_update <= now:
         next_update += min_interval
     sleep_time = (next_update - now).total_seconds()
-    print(f"Waiting for {sleep_time:.2f} seconds until {next_update}...")
+    logger.info(f"Waiting for {sleep_time:.2f} seconds until {next_update}...")
     time.sleep(sleep_time)
-
 
 def sort_intervals(intervals):
     """Sort intervals by their duration in descending order."""
@@ -603,25 +643,30 @@ def sort_intervals(intervals):
         return int(interval)
     return sorted(intervals, key=interval_to_minutes, reverse=True)
 
-
 def interval_to_minutes(interval):
     """Convert interval to minutes for sorting."""
     if interval == "D":
         return 24 * 60
     return int(interval)
 
-
 def main():
     """Main function to run the data update loop with parallel computation and sequential order execution."""
     global LAST_ARCHIVE_TIME
-    #symbols = ["ETHUSDT", "BTCUSDT", "ADAUSDT"]  # Example with multiple symbols
-    symbols = ["ETHUSDT", "BTCUSDT"]  # Example with multiple symbols
-    intervals = ["15", "30", "60", "120", "240", "360", "720", "D"]  # Updated to include 15-minute interval
+    # Start the listener process for logging
+    listener = multiprocessing.Process(target=listener_process, args=(log_queue, log_file))
+    listener.start()
+
+    # Configure logger for the main process
+    global logger
+    logger = configure_logger(log_queue)
+
+    symbols = ["ADAUSDT"]  # Example with multiple symbols
+    intervals = ["1", "5"]  # Updated to include 1-minute and 5-minute intervals
     intervals = sort_intervals(intervals)
-    print(f"Processing intervals in order: {intervals}")
+    logger.info(f"Processing intervals in order: {intervals}")
 
     num_processes = min(multiprocessing.cpu_count(), len(symbols) * len(intervals))
-    print(f"Using {num_processes} processes for parallel execution.")
+    logger.info(f"Using {num_processes} processes for parallel execution.")
 
     # Create a dictionary to map symbols to their index for sorting
     symbol_priority = {symbol: index for index, symbol in enumerate(symbols)}
@@ -630,33 +675,40 @@ def main():
     if LAST_ARCHIVE_TIME is None:
         LAST_ARCHIVE_TIME = datetime.now(timezone.utc)
 
-    while True:
-        tasks = [(symbol, interval) for symbol in symbols for interval in intervals]
-        with multiprocessing.Pool(processes=num_processes) as pool:
-            potential_orders = pool.starmap(update_data, tasks)  # Collect list of potential_order dicts or None
+    try:
+        while True:
+            tasks = [(symbol, interval) for symbol in symbols for interval in intervals]
+            with multiprocessing.Pool(processes=num_processes, initializer=worker_init, initargs=(log_queue,)) as pool:
+                potential_orders = pool.starmap(update_data, tasks)  # Collect list of potential_order dicts or None
 
-        # Filter and sort non-None potential orders: by symbol order in symbols list, then interval duration descending
-        pending_orders = [order for order in potential_orders if order is not None]
-        pending_orders.sort(
-            key=lambda o: (symbol_priority[o['symbol']], -interval_to_minutes(o['interval']))
-        )
+            # Filter and sort non-None potential orders: by symbol order in symbols list, then interval duration descending
+            pending_orders = [order for order in potential_orders if order is not None]
+            pending_orders.sort(
+                key=lambda o: (symbol_priority[o['symbol']], -interval_to_minutes(o['interval']))
+            )
 
-        # Execute orders sequentially
-        for order in pending_orders:
-            execute_order(order)
+            # Execute orders sequentially
+            for order in pending_orders:
+                execute_order(order)
 
-        wait_until_next_update(intervals)
-        time.sleep(1)
+            wait_until_next_update(intervals)
+            time.sleep(1)
 
-        # Check if it's time to archive old files
-        now = datetime.now(timezone.utc)
-        delta = get_archive_delta(ARCHIVE_FREQUENCY)
-        if now - LAST_ARCHIVE_TIME >= delta:
-            all_folders = [f"{symbol}_{interval}" for symbol in symbols for interval in intervals]
-            archive_old_files(all_folders, ARCHIVE_FREQUENCY)
-            LAST_ARCHIVE_TIME = now
-            logger.info(f"Archiving completed at {now.strftime('%Y-%m-%d %H:%M:%S')} with frequency {ARCHIVE_FREQUENCY}")
-
+            # Check if it's time to archive old files
+            now = datetime.now(timezone.utc)
+            delta = get_archive_delta(ARCHIVE_FREQUENCY)
+            if now - LAST_ARCHIVE_TIME >= delta:
+                all_folders = [f"{symbol}_{interval}" for symbol in symbols for interval in intervals]
+                archive_old_files(all_folders, ARCHIVE_FREQUENCY)
+                LAST_ARCHIVE_TIME = now
+                logger.info(f"Archiving completed at {now.strftime('%Y-%m-%d %H:%M:%S')} with frequency {ARCHIVE_FREQUENCY}")
+    except KeyboardInterrupt:
+        logger.info("Received KeyboardInterrupt, shutting down...")
+    finally:
+        # Signal the listener to stop and clean up
+        log_queue.put(None)
+        listener.join()
+        logger.info("Logging listener stopped.")
 
 if __name__ == "__main__":
     multiprocessing.set_start_method('spawn', force=True)

@@ -6,6 +6,9 @@ dist/
 build/
 .eggs/
 
+# Git
+.git
+
 # Virtual Environment
 .venv/
 env/
@@ -16,8 +19,8 @@ env.bak/
  data/
 # analysis_results/
 # results/
-# *.csv
- *.parquet
+*.csv
+*.parquet
 
 # IDEs/Editoren
 .vscode/

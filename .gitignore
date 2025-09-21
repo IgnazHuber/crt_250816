@@ -36,3 +36,5 @@ results/
 *.json
 *.7z
 *.zip
+*.tmp
+*.temp

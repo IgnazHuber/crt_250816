@@ -2533,11 +2533,11 @@
     2730
   ],
   "meta": {
-    "csv": "C:\\Projekte\\crt_250816\\scripts\\rt_250907\\Historical_data_Indicator_Calculation\\output\\CRYPTO\\ETH\\output_1day_parquet\\eth_1day_candlesticks_all.csv",
-    "output_dir": "C:\\Projekte\\crt_250816\\scripts\\rt_250907\\Historical_data_Indicator_Calculation\\output\\CRYPTO\\ETH\\output_1day_parquet",
+    "csv": "D:/Projekte/crt_250816/scripts/rt_250907/Historical_data_Indicator_Calculation/output/CRYPTO/ETH/output_1day_parquet/eth_1day_candlesticks_all.csv",
+    "output_dir": "D:/Projekte/crt_250816/scripts/rt_250907/Historical_data_Indicator_Calculation/output/CRYPTO/ETH/output_1day_parquet",
     "start_i": 200,
     "end_i": 2731,
     "total_all": 2531,
-    "saved_at": "2025-09-15 19:06:11"
+    "saved_at": "2025-09-18 17:42:35"
   }
 }

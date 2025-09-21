@@ -16,9 +16,9 @@ ENV/
 env.bak/
 
 # Data & Results (große Daten/Output rauslassen!)
- data/
-# analysis_results/
-# results/
+data/
+analysis_results/
+results/
 *.csv
 *.parquet
 
@@ -33,4 +33,6 @@ env.bak/
 *.xlsx
 *.png
 *.html
-
+*.json
+*.7z
+*.zip

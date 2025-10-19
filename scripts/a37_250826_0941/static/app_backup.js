@@ -1,1 +1,0 @@
-// Backup of current app.js before major changes
